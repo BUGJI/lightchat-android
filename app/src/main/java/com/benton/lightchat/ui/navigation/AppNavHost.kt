@@ -22,6 +22,7 @@ import com.benton.lightchat.ui.profile.NotificationSettingsScreen
 import com.benton.lightchat.ui.profile.SessionsScreen
 import com.benton.lightchat.ui.profile.SettingsScreen
 import com.benton.lightchat.ui.profile.TwoFactorScreen
+import com.benton.lightchat.ui.profile.UpdateViewModel
 import com.benton.lightchat.ui.profile.UserProfileScreen
 import com.benton.lightchat.ui.server.ServerConfigScreen
 
@@ -29,6 +30,7 @@ import com.benton.lightchat.ui.server.ServerConfigScreen
 fun MainNavHost(
     container: AppContainer,
     prefs: PrefsState,
+    updateViewModel: UpdateViewModel,
 ) {
     val navController = rememberNavController()
     val baseUrl = prefs.baseUrl
@@ -55,7 +57,9 @@ fun MainNavHost(
                 baseUrl = baseUrl,
                 onBack = { navController.popBackStack() },
                 onOpenPrivate = { chatId, userId, title ->
-                    navController.navigate("private/$chatId/$userId?title=${Uri.encode(title)}")
+                    navController.navigate("private/$chatId/$userId?title=${Uri.encode(title)}") {
+                        popUpTo("main") { inclusive = false }
+                    }
                 },
             )
         }
@@ -69,7 +73,9 @@ fun MainNavHost(
                     navController.navigate("user/$userId")
                 },
                 onOpenPrivate = { chatId, userId, title ->
-                    navController.navigate("private/$chatId/$userId?title=${Uri.encode(title)}")
+                    navController.navigate("private/$chatId/$userId?title=${Uri.encode(title)}") {
+                        popUpTo("main") { inclusive = false }
+                    }
                 },
             )
         }
@@ -178,6 +184,7 @@ fun MainNavHost(
                 onOpenSessions = { navController.navigate("settings/sessions") },
                 onOpenTwoFactor = { navController.navigate("settings/two-factor") },
                 onOpenEmailVerification = { navController.navigate("settings/email") },
+                updateViewModel = updateViewModel,
             )
         }
 

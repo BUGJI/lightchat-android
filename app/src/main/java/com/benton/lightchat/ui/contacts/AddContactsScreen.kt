@@ -249,11 +249,20 @@ private fun FriendsSection(
                             )
                         }
                         Spacer(Modifier.width(8.dp))
-                        IconButton(
-                            onClick = { onAddFriend(user) },
-                            enabled = !state.actionInProgress,
-                        ) {
-                            Icon(Icons.Filled.PersonAdd, contentDescription = "加好友")
+                        if (user.id in state.friendUserIds || user.id in state.requestedUserIds) {
+                            Text(
+                                text = if (user.id in state.friendUserIds) "已是好友" else "已申请",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                        } else {
+                            IconButton(
+                                onClick = { onAddFriend(user) },
+                                enabled = !state.actionInProgress,
+                            ) {
+                                Icon(Icons.Filled.PersonAdd, contentDescription = "加好友")
+                            }
                         }
                         Spacer(Modifier.width(4.dp))
                         FilledTonalButton(

@@ -1,14 +1,22 @@
 package com.benton.lightchat.ui.chats
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,18 +41,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -55,19 +69,26 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -81,13 +102,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
 import com.benton.lightchat.data.remote.MessageDto
 import com.benton.lightchat.ui.components.EmptyState
 import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.OfflineBanner
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.util.TimeFormat
 import com.benton.lightchat.util.UrlUtils
 import androidx.compose.material.icons.filled.Forum
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -105,7 +130,30 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val clipboard = remember(context) {
+        context.getSystemService(ClipboardManager::class.java)
+    }
     var previewUrl by remember { mutableStateOf<String?>(null) }
+    var pendingSaveBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val saveImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/*"),
+    ) { uri ->
+        val bitmap = pendingSaveBitmap
+        pendingSaveBitmap = null
+        if (uri != null && bitmap != null) {
+            val saved = runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                } ?: false
+            }.getOrDefault(false)
+            Toast.makeText(
+                context,
+                if (saved) "图片已保存" else "保存失败",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
     var menuExpanded by remember { mutableStateOf(false) }
     var showContactSettings by remember { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
@@ -201,6 +249,9 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding(),
         ) {
+            if (state.offline) {
+                OfflineBanner()
+            }
             Box(Modifier.weight(1f)) {
                 when {
                     state.loading -> LoadingBox()
@@ -221,6 +272,10 @@ fun ChatScreen(
                         onLoadOlder = viewModel::loadOlder,
                         onRecall = viewModel::recall,
                         onDelete = viewModel::delete,
+                        onCopy = { text ->
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("消息", text))
+                            scope.launch { snackbarHostState.showSnackbar("已复制") }
+                        },
                         focusMessageId = state.focusMessageId,
                         onFocusConsumed = viewModel::consumeFocus,
                         onPreviewImage = { previewUrl = it },
@@ -238,41 +293,61 @@ fun ChatScreen(
                         },
                     )
                 }
+                if (state.locating) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "正在定位消息…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
 
             MessageInput(
                 sending = state.sending,
                 uploading = state.uploading,
+                uploadProgress = state.uploadProgress,
                 onSendText = viewModel::sendText,
                 onPickImage = { uri -> viewModel.sendAttachment(uri, true) },
                 onPickFile = { uri -> viewModel.sendAttachment(uri, false) },
+                onCancelUpload = viewModel::cancelUpload,
             )
         }
     }
 
     previewUrl?.let { url ->
-        Dialog(
-            onDismissRequest = { previewUrl = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .combinedClickable(
-                        onClick = { previewUrl = null },
-                        onLongClick = {},
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                AsyncImage(
-                    model = url,
-                    contentDescription = "图片预览",
-                    modifier = Modifier.fillMaxWidth(),
-                    contentScale = ContentScale.Fit,
-                )
-            }
-        }
+        ImagePreviewDialog(
+            url = url,
+            onDismiss = { previewUrl = null },
+            onShare = { imageUrl ->
+                runCatching {
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, imageUrl)
+                    }
+                    context.startActivity(Intent.createChooser(share, "分享图片"))
+                }
+            },
+            onSave = { imageUrl ->
+                scope.launch {
+                    val request = ImageRequest.Builder(context).data(imageUrl).build()
+                    val result = context.imageLoader.execute(request)
+                    val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
+                    if (bitmap == null) {
+                        Toast.makeText(context, "无法保存图片", Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingSaveBitmap = bitmap
+                        saveImageLauncher.launch("lightchat_${System.currentTimeMillis()}.jpg")
+                    }
+                }
+            },
+        )
     }
 
     if (showContactSettings && target is ChatTarget.Private) {
@@ -303,15 +378,100 @@ fun ChatScreen(
             onLoadMore = viewModel::loadMoreSearch,
             onSelect = { message ->
                 searchOpen = false
-                if (state.messages.any { it.id == message.id }) {
-                    viewModel.focusMessage(message.id)
-                }
+                viewModel.clearSearch()
+                viewModel.openSearchResult(message)
             },
             onDismiss = {
                 searchOpen = false
                 viewModel.clearSearch()
             },
         )
+    }
+}
+
+@Composable
+private fun ImagePreviewDialog(
+    url: String,
+    onDismiss: () -> Unit,
+    onShare: (String) -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var scale by remember(url) { mutableStateOf(1f) }
+    var offset by remember(url) { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val next = (scale * zoomChange).coerceIn(1f, 5f)
+        scale = next
+        offset = if (next <= 1f) Offset.Zero else offset + panChange
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AsyncImage(
+                model = url,
+                contentDescription = "图片预览",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(url) {
+                        detectTapGestures(
+                            onTap = {
+                                if (scale > 1f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                } else {
+                                    onDismiss()
+                                }
+                            },
+                            onDoubleTap = {
+                                if (scale > 1f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                } else {
+                                    scale = 2.5f
+                                }
+                            },
+                        )
+                    }
+                    .transformable(transformState)
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    ),
+                contentScale = ContentScale.Fit,
+            )
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .safeDrawingPadding()
+                    .padding(8.dp),
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White)
+            }
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .safeDrawingPadding()
+                    .padding(8.dp),
+            ) {
+                IconButton(onClick = { onSave(url) }) {
+                    Icon(Icons.Filled.Download, contentDescription = "保存", tint = Color.White)
+                }
+                IconButton(onClick = { onShare(url) }) {
+                    Icon(Icons.Filled.Share, contentDescription = "分享", tint = Color.White)
+                }
+            }
+        }
     }
 }
 
@@ -445,6 +605,29 @@ private fun ContactSettingsDialog(
 ) {
     var draftNickname by remember(nickname) { mutableStateOf(nickname) }
     var draftDnd by remember(dnd) { mutableStateOf(dnd) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除聊天") },
+            text = { Text("删除后对方再发消息会重新出现在会话列表。确定删除？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+            },
+        )
+        return
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -475,7 +658,7 @@ private fun ContactSettingsDialog(
                     Switch(checked = draftDnd, onCheckedChange = { draftDnd = it })
                 }
                 TextButton(
-                    onClick = onDelete,
+                    onClick = { confirmDelete = true },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("删除聊天", color = MaterialTheme.colorScheme.error)
@@ -508,17 +691,32 @@ private fun MessageList(
     onLoadOlder: () -> Unit,
     onRecall: (MessageDto) -> Unit,
     onDelete: (MessageDto) -> Unit,
+    onCopy: (String) -> Unit,
     focusMessageId: Long?,
     onFocusConsumed: () -> Unit,
     onPreviewImage: (String) -> Unit,
     onOpenFile: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    var newMessageCount by remember { mutableIntStateOf(0) }
+    val lastItemIndex = messages.lastIndex + if (hasMore || loadingOlder) 1 else 0
 
     LaunchedEffect(messages.lastOrNull()?.id) {
-        if (messages.isNotEmpty() && !listState.canScrollForward) {
-            listState.scrollToItem(messages.lastIndex)
+        val last = messages.lastOrNull() ?: return@LaunchedEffect
+        if (focusMessageId != null) return@LaunchedEffect
+        val isMine = last.userId == currentUserId || last.fromUserId == currentUserId
+        if (isMine || !listState.canScrollForward) {
+            listState.scrollToItem(lastItemIndex)
+            newMessageCount = 0
+        } else {
+            newMessageCount += 1
         }
+    }
+
+    LaunchedEffect(isAtBottom) {
+        if (isAtBottom) newMessageCount = 0
     }
 
     LaunchedEffect(focusMessageId) {
@@ -531,6 +729,7 @@ private fun MessageList(
         onFocusConsumed()
     }
 
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -565,11 +764,35 @@ private fun MessageList(
                 baseUrl = baseUrl,
                 canRecall = isMine && recallEnabled && message.type != "recalled",
                 canDelete = isMine && target is ChatTarget.Channel && message.type != "recalled",
+                canCopy = message.type !in setOf("image", "file") && message.content.isNotBlank(),
                 onRecall = { onRecall(message) },
                 onDelete = { onDelete(message) },
+                onCopy = { onCopy(message.content) },
                 onPreviewImage = onPreviewImage,
                 onOpenFile = onOpenFile,
             )
+        }
+    }
+        if (!isAtBottom || newMessageCount > 0) {
+            FilledTonalButton(
+                onClick = {
+                    scope.launch {
+                        listState.animateScrollToItem(lastItemIndex)
+                        newMessageCount = 0
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(if (newMessageCount > 0) "新消息" else "回到底部")
+            }
         }
     }
 }
@@ -583,14 +806,17 @@ private fun MessageBubble(
     baseUrl: String?,
     canRecall: Boolean,
     canDelete: Boolean,
+    canCopy: Boolean,
     onRecall: () -> Unit,
     onDelete: () -> Unit,
+    onCopy: () -> Unit,
     onPreviewImage: (String) -> Unit,
     onOpenFile: (String) -> Unit,
 ) {
     val isRecalled = message.type == "recalled"
     val isSystem = message.type == "system"
     var menuExpanded by remember { mutableStateOf(false) }
+    var pendingAction by remember { mutableStateOf<MessageAction?>(null) }
 
     if (isSystem) {
         Text(
@@ -668,7 +894,7 @@ private fun MessageBubble(
                                 }
                             },
                             onLongClick = {
-                                if (canRecall || canDelete) menuExpanded = true
+                                if (canCopy || canRecall || canDelete) menuExpanded = true
                             },
                         ),
                     ) {
@@ -736,12 +962,21 @@ private fun MessageBubble(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
                 ) {
+                    if (canCopy) {
+                        DropdownMenuItem(
+                            text = { Text("复制") },
+                            onClick = {
+                                menuExpanded = false
+                                onCopy()
+                            },
+                        )
+                    }
                     if (canRecall) {
                         DropdownMenuItem(
                             text = { Text("撤回") },
                             onClick = {
                                 menuExpanded = false
-                                onRecall()
+                                pendingAction = MessageAction.Recall
                             },
                         )
                     }
@@ -750,7 +985,7 @@ private fun MessageBubble(
                             text = { Text("删除") },
                             onClick = {
                                 menuExpanded = false
-                                onDelete()
+                                pendingAction = MessageAction.Delete
                             },
                         )
                     }
@@ -765,18 +1000,63 @@ private fun MessageBubble(
             )
         }
     }
+
+    pendingAction?.let { action ->
+        val recall = action == MessageAction.Recall
+        AlertDialog(
+            onDismissRequest = { pendingAction = null },
+            title = { Text(if (recall) "撤回消息" else "删除消息") },
+            text = {
+                Text(
+                    if (recall) {
+                        "撤回后对方将看不到这条消息。"
+                    } else {
+                        "删除后该消息将从群聊中移除，且不可恢复。"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingAction = null
+                        if (recall) onRecall() else onDelete()
+                    },
+                ) {
+                    Text(
+                        text = if (recall) "撤回" else "删除",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAction = null }) { Text("取消") }
+            },
+        )
+    }
 }
+
+private enum class MessageAction { Recall, Delete }
 
 @Composable
 private fun MessageInput(
     sending: Boolean,
     uploading: Boolean,
-    onSendText: (String) -> Unit,
+    uploadProgress: Float?,
+    onSendText: (String, () -> Unit) -> Unit,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
+    onCancelUpload: () -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var attachMenu by remember { mutableStateOf(false) }
+    val sendDraft = {
+        val content = draft
+        if (content.isNotBlank() && !sending && !uploading) {
+            onSendText(content) {
+                if (draft == content) draft = ""
+            }
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) onPickImage(uri) }
@@ -825,15 +1105,12 @@ private fun MessageInput(
                 placeholder = { Text("输入消息…") },
                 maxLines = 5,
                 shape = RoundedCornerShape(22.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { sendDraft() }),
             )
 
             IconButton(
-                onClick = {
-                    if (draft.isNotBlank()) {
-                        onSendText(draft)
-                        draft = ""
-                    }
-                },
+                onClick = sendDraft,
                 enabled = draft.isNotBlank() && !sending && !uploading,
             ) {
                 if (sending || uploading) {
@@ -848,12 +1125,26 @@ private fun MessageInput(
             }
         }
         if (uploading) {
-            Text(
-                text = "正在上传附件…",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    LinearProgressIndicator(
+                        progress = { uploadProgress ?: 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "正在上传附件… ${((uploadProgress ?: 0f) * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onCancelUpload) { Text("取消") }
+            }
         }
     }
 }

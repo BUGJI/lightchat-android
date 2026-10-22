@@ -35,9 +35,11 @@ import com.benton.lightchat.data.remote.UploadData
 import kotlinx.serialization.json.JsonElement
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import okio.BufferedSink
 
 class ChatRepository(
     private val context: Context,
@@ -235,7 +237,10 @@ class ChatRepository(
         )
     }
 
-    suspend fun upload(uri: Uri): ApiResult<UploadData> = withContext(Dispatchers.IO) {
+    suspend fun upload(
+        uri: Uri,
+        onProgress: (Float) -> Unit = {},
+    ): ApiResult<UploadData> = withContext(Dispatchers.IO) {
         val size = querySize(uri)
         if (size != null && size > 12L * 1024 * 1024) {
             return@withContext ApiResult.Failure("file_too_large", "文件过大（超过 12MB）")
@@ -245,7 +250,7 @@ class ChatRepository(
             ?: return@withContext ApiResult.Failure("upload_failed", "无法读取所选文件")
         val mime = resolver.getType(uri) ?: "application/octet-stream"
         val name = queryDisplayName(uri) ?: "upload_${System.currentTimeMillis()}"
-        val body = bytes.toRequestBody(mime.toMediaTypeOrNull())
+        val body = ProgressRequestBody(bytes, mime.toMediaTypeOrNull(), onProgress)
         val part = MultipartBody.Part.createFormData("file", name, body)
         executor.execute { service -> service.uploadFile(part) }
     }
@@ -266,5 +271,31 @@ class ChatRepository(
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
             }
         }.getOrNull()
+    }
+}
+
+private class ProgressRequestBody(
+    private val bytes: ByteArray,
+    private val mediaType: MediaType?,
+    private val onProgress: (Float) -> Unit,
+) : RequestBody() {
+
+    override fun contentType(): MediaType? = mediaType
+
+    override fun contentLength(): Long = bytes.size.toLong()
+
+    override fun writeTo(sink: BufferedSink) {
+        if (bytes.isEmpty()) {
+            onProgress(1f)
+            return
+        }
+        var offset = 0
+        val chunkSize = 64 * 1024
+        while (offset < bytes.size) {
+            val count = minOf(chunkSize, bytes.size - offset)
+            sink.write(bytes, offset, count)
+            offset += count
+            onProgress(offset.toFloat() / bytes.size)
+        }
     }
 }

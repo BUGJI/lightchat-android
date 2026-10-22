@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -152,6 +153,7 @@ fun FriendsScreen(
                 0 -> FriendsList(
                     state = state,
                     baseUrl = baseUrl,
+                    onOpenAdd = onOpenAdd,
                     onOpenUserProfile = onOpenUserProfile,
                     onOpenChat = { friend ->
                         viewModel.openChat(
@@ -183,6 +185,7 @@ fun FriendsScreen(
 private fun FriendsList(
     state: FriendsUiState,
     baseUrl: String?,
+    onOpenAdd: () -> Unit,
     onOpenUserProfile: (Long) -> Unit,
     onOpenChat: (FriendDto) -> Unit,
     onRemove: (FriendDto) -> Unit,
@@ -194,6 +197,8 @@ private fun FriendsList(
             icon = Icons.Filled.Group,
             title = "还没有好友",
             description = "去添加好友，开始聊天吧",
+            actionLabel = "添加好友",
+            onAction = onOpenAdd,
         )
 
         else -> LazyColumn(
@@ -203,6 +208,7 @@ private fun FriendsList(
             items(state.friends, key = { it.userId }) { friend ->
                 val displayName = friend.nickname.takeIf { it.isNotBlank() } ?: friend.username
                 var menuExpanded by remember { mutableStateOf(false) }
+                var pendingAction by remember { mutableStateOf<FriendAction?>(null) }
 
                 Row(
                     modifier = Modifier
@@ -252,7 +258,7 @@ private fun FriendsList(
                                 text = { Text("删除好友") },
                                 onClick = {
                                     menuExpanded = false
-                                    onRemove(friend)
+                                    pendingAction = FriendAction.Remove
                                 },
                             )
                             DropdownMenuItem(
@@ -261,11 +267,44 @@ private fun FriendsList(
                                 },
                                 onClick = {
                                     menuExpanded = false
-                                    onBlock(friend)
+                                    pendingAction = FriendAction.Block
                                 },
                             )
                         }
                     }
+                }
+
+                pendingAction?.let { action ->
+                    val remove = action == FriendAction.Remove
+                    AlertDialog(
+                        onDismissRequest = { pendingAction = null },
+                        title = { Text(if (remove) "删除好友" else "拉黑用户") },
+                        text = {
+                            Text(
+                                if (remove) {
+                                    "删除后你们将不再是好友，确定删除「$displayName」？"
+                                } else {
+                                    "拉黑后对方将无法与你聊天，确定拉黑「$displayName」？"
+                                },
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    pendingAction = null
+                                    if (remove) onRemove(friend) else onBlock(friend)
+                                },
+                            ) {
+                                Text(
+                                    text = if (remove) "删除" else "拉黑",
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { pendingAction = null }) { Text("取消") }
+                        },
+                    )
                 }
                 HorizontalDivider(modifier = Modifier.padding(start = 76.dp))
             }
@@ -415,3 +454,5 @@ private fun BlockedList(
         }
     }
 }
+
+private enum class FriendAction { Remove, Block }

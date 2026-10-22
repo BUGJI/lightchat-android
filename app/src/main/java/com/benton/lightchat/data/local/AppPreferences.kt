@@ -31,6 +31,8 @@ data class PrefsState(
     val rememberPassword: Boolean = false,
     val savedUsername: String = "",
     val savedPassword: String = "",
+    val autoCheckUpdates: Boolean = true,
+    val lastUpdateCheckAt: Long = 0,
 )
 
 class AppPreferences(private val context: Context) {
@@ -49,6 +51,8 @@ class AppPreferences(private val context: Context) {
         val REMEMBER_PASSWORD = booleanPreferencesKey("remember_password")
         val SAVED_USERNAME = stringPreferencesKey("saved_username")
         val SAVED_PASSWORD = stringPreferencesKey("saved_password")
+        val AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
+        val LAST_UPDATE_CHECK_AT = longPreferencesKey("last_update_check_at")
     }
 
     val stateFlow: Flow<PrefsState> = context.lightchatDataStore.data
@@ -70,6 +74,8 @@ class AppPreferences(private val context: Context) {
                 rememberPassword = prefs[Keys.REMEMBER_PASSWORD] ?: false,
                 savedUsername = prefs[Keys.SAVED_USERNAME].orEmpty(),
                 savedPassword = prefs[Keys.SAVED_PASSWORD].orEmpty(),
+                autoCheckUpdates = prefs[Keys.AUTO_CHECK_UPDATES] ?: true,
+                lastUpdateCheckAt = prefs[Keys.LAST_UPDATE_CHECK_AT] ?: 0,
             )
         }
 
@@ -125,6 +131,18 @@ class AppPreferences(private val context: Context) {
     suspend fun updateUsername(username: String) {
         context.lightchatDataStore.edit { prefs ->
             prefs[Keys.USERNAME] = username
+        }
+    }
+
+    suspend fun setAutoCheckUpdates(enabled: Boolean) {
+        context.lightchatDataStore.edit { prefs ->
+            prefs[Keys.AUTO_CHECK_UPDATES] = enabled
+        }
+    }
+
+    suspend fun setLastUpdateCheckAt(timestamp: Long) {
+        context.lightchatDataStore.edit { prefs ->
+            prefs[Keys.LAST_UPDATE_CHECK_AT] = timestamp
         }
     }
 

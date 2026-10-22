@@ -9,6 +9,7 @@ import com.benton.lightchat.data.repository.AuthRepository
 import com.benton.lightchat.data.repository.ChatRepository
 import com.benton.lightchat.data.repository.FriendRepository
 import com.benton.lightchat.data.repository.ServerRepository
+import com.benton.lightchat.data.repository.UpdateRepository
 import com.benton.lightchat.data.repository.UserRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ class AppContainer(application: Application) {
     val userRepository = UserRepository(executor)
     val friendRepository = FriendRepository(executor)
     val serverRepository = ServerRepository(apiClient, executor)
+    val updateRepository = UpdateRepository(application)
 
     init {
         scope.launch {

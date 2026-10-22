@@ -43,6 +43,7 @@ data class ChatUiState(
     val loading: Boolean = true,
     val sending: Boolean = false,
     val uploading: Boolean = false,
+    val uploadProgress: Float? = null,
     val loadingOlder: Boolean = false,
     val hasMore: Boolean = false,
     val recallEnabled: Boolean = true,
@@ -55,6 +56,8 @@ data class ChatUiState(
     val searchHasMore: Boolean = false,
     val searchLoadingMore: Boolean = false,
     val focusMessageId: Long? = null,
+    val locating: Boolean = false,
+    val offline: Boolean = false,
     val error: String? = null,
 )
 
@@ -74,6 +77,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var currentUsername = ""
     private var openedKey: String? = null
     private var searchJob: Job? = null
+    private var uploadJob: Job? = null
     private var searchCursor = 0L
 
     fun open(target: ChatTarget) {
@@ -97,12 +101,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun pollLoop() {
         val target = _state.value.target ?: return
         while (coroutineContext.isActive) {
-            pollOnce(target)
+            val online = pollOnce(target)
+            _state.update { it.copy(offline = !online) }
             delay(3000)
         }
     }
 
-    fun sendText(text: String) {
+    fun sendText(text: String, onSent: () -> Unit = {}) {
         val target = _state.value.target ?: return
         val content = text.trim()
         if (content.isEmpty()) return
@@ -128,6 +133,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     appendMessage(message)
                     _state.update { it.copy(sending = false) }
+                    onSent()
                 }
 
                 is ApiResult.Failure -> {
@@ -141,23 +147,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val target = _state.value.target ?: return
         if (_state.value.sending || _state.value.uploading) return
 
-        viewModelScope.launch {
-            _state.update { it.copy(uploading = true, error = null) }
-            when (val uploadResult = chatRepository.upload(uri)) {
+        uploadJob = viewModelScope.launch {
+            _state.update { it.copy(uploading = true, uploadProgress = 0f, error = null) }
+            when (
+                val uploadResult = chatRepository.upload(uri) { progress ->
+                    _state.update { it.copy(uploadProgress = progress.coerceIn(0f, 1f)) }
+                }
+            ) {
                 is ApiResult.Failure -> {
-                    _state.update { it.copy(uploading = false, error = uploadResult.message) }
+                    _state.update {
+                        it.copy(
+                            uploading = false,
+                            uploadProgress = null,
+                            error = uploadResult.message,
+                        )
+                    }
                 }
 
                 is ApiResult.Success -> {
                     val upload = uploadResult.data
                     if (upload == null) {
                         _state.update {
-                            it.copy(uploading = false, error = ErrorMessages.humanize("upload_failed"))
+                            it.copy(
+                                uploading = false,
+                                uploadProgress = null,
+                                error = ErrorMessages.humanize("upload_failed"),
+                            )
                         }
                         return@launch
                     }
                     val type = if (preferImage || upload.fileType == "image") "image" else "file"
-                    _state.update { it.copy(uploading = false, sending = true) }
+                    _state.update { it.copy(uploading = false, uploadProgress = null, sending = true) }
                     val result = when (target) {
                         is ChatTarget.Channel -> chatRepository.sendChannelMessage(
                             channelId = target.id,
@@ -195,6 +215,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    fun cancelUpload() {
+        if (!_state.value.uploading) return
+        uploadJob?.cancel()
+        uploadJob = null
+        _state.update { it.copy(uploading = false, uploadProgress = null) }
     }
 
     fun recall(message: MessageDto) {
@@ -348,6 +375,65 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeFocus() = _state.update { it.copy(focusMessageId = null) }
 
+    fun openSearchResult(message: MessageDto) {
+        val target = _state.value.target ?: return
+        if (_state.value.locating) return
+        if (_state.value.messages.any { it.id == message.id }) {
+            focusMessage(message.id)
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(locating = true, error = null) }
+            var found = false
+            var exhausted = false
+            var failed = false
+            var pages = 0
+            while (!found && !exhausted && !failed && pages < 20) {
+                if (_state.value.target?.key != target.key) return@launch
+                pages++
+                val oldestId = _state.value.messages.firstOrNull()?.id ?: break
+                if (oldestId <= message.id) {
+                    exhausted = true
+                    break
+                }
+                when (
+                    val result = when (target) {
+                        is ChatTarget.Channel ->
+                            chatRepository.channelHistory(target.id, before = oldestId, limit = 100)
+
+                        is ChatTarget.Private ->
+                            chatRepository.privateHistory(target.chatId, before = oldestId, limit = 100)
+                    }
+                ) {
+                    is ApiResult.Success -> {
+                        if (_state.value.target?.key != target.key) return@launch
+                        val history = result.data
+                        val older = history?.messages.orEmpty()
+                        val existing = _state.value.messages.mapTo(HashSet()) { it.id }
+                        val merged = (older.filter { it.id !in existing } + _state.value.messages)
+                            .sortedBy { it.id }
+                        _state.update {
+                            it.copy(messages = merged, hasMore = history?.hasMore ?: false)
+                        }
+                        found = merged.any { it.id == message.id }
+                        if (history?.hasMore != true) exhausted = true
+                    }
+
+                    is ApiResult.Failure -> {
+                        _state.update { it.copy(error = result.message) }
+                        failed = true
+                    }
+                }
+            }
+            if (_state.value.target?.key != target.key) return@launch
+            _state.update { it.copy(locating = false) }
+            when {
+                found -> focusMessage(message.id)
+                !failed -> _state.update { it.copy(error = "该消息位置较早，暂时无法定位") }
+            }
+        }
+    }
+
     private suspend fun loadHistory(target: ChatTarget) {
         _state.update { it.copy(loading = true, error = null) }
         when (target) {
@@ -480,7 +566,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun pollOnce(target: ChatTarget) {
+    private suspend fun pollOnce(target: ChatTarget): Boolean {
         val result = chatRepository.sync(
             channelId = if (target is ChatTarget.Channel) target.id else null,
             sinceId = if (target is ChatTarget.Channel) channelCursor else null,
@@ -489,8 +575,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             recallSinceId = recallCursor,
             lists = false,
         )
-        if (result !is ApiResult.Success) return
-        val data = result.data ?: return
+        if (result !is ApiResult.Success) return false
+        val data = result.data ?: return true
 
         val incoming = data.messages.filter { message ->
             when (target) {
@@ -516,7 +602,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        if (incoming.isEmpty() && recalls.isEmpty()) return
+        if (incoming.isEmpty() && recalls.isEmpty()) return true
 
         _state.update { current ->
             val merged = current.messages.toMutableList()
@@ -533,6 +619,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (data.recallLatestId > recallCursor) recallCursor = data.recallLatestId
+        return true
     }
 
     private fun applyRecall(messages: MutableList<MessageDto>, event: RecallEventDto) {

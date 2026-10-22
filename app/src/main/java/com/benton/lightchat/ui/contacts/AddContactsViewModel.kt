@@ -26,6 +26,8 @@ data class AddContactsUiState(
     val searching: Boolean = false,
     val loading: Boolean = true,
     val actionInProgress: Boolean = false,
+    val requestedUserIds: Set<Long> = emptySet(),
+    val friendUserIds: Set<Long> = emptySet(),
     val error: String? = null,
 )
 
@@ -166,12 +168,28 @@ class AddContactsViewModel(application: Application) : AndroidViewModel(applicat
 
     fun sendFriendRequest(user: UserDto) {
         if (_state.value.actionInProgress) return
+        if (user.id in _state.value.requestedUserIds) return
+        if (user.id in _state.value.friendUserIds) return
         viewModelScope.launch {
             _state.update { it.copy(actionInProgress = true, error = null) }
             when (val result = friendRepository.sendRequest(userId = user.id)) {
                 is ApiResult.Success -> {
-                    _state.update { it.copy(actionInProgress = false) }
                     val autoAccepted = result.data?.autoAccepted == true
+                    _state.update {
+                        it.copy(
+                            actionInProgress = false,
+                            requestedUserIds = if (autoAccepted) {
+                                it.requestedUserIds
+                            } else {
+                                it.requestedUserIds + user.id
+                            },
+                            friendUserIds = if (autoAccepted) {
+                                it.friendUserIds + user.id
+                            } else {
+                                it.friendUserIds
+                            },
+                        )
+                    }
                     _events.emit(
                         AddContactsEvent.ShowMessage(
                             if (autoAccepted) "你们已成为好友" else "好友申请已发送",

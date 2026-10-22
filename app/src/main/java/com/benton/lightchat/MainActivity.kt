@@ -18,15 +18,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.local.PrefsState
 import com.benton.lightchat.ui.auth.AuthScreen
+import com.benton.lightchat.ui.components.UpdateDialogHost
 import com.benton.lightchat.ui.navigation.MainNavHost
+import com.benton.lightchat.ui.profile.UpdateViewModel
 import com.benton.lightchat.ui.server.ServerConfigScreen
 import com.benton.lightchat.ui.theme.LightchatTheme
 import com.benton.lightchat.ui.theme.ThemeMode
@@ -39,6 +43,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             val prefs by container.preferences.stateFlow
                 .collectAsStateWithLifecycle(initialValue = null)
+            val updateViewModel: UpdateViewModel = viewModel()
+            LaunchedEffect(Unit) { updateViewModel.maybeAutoCheck() }
             val themeMode = ThemeMode.fromValue(prefs?.themeMode)
             val darkTheme = when (themeMode) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -53,7 +59,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    LightchatApp(container = container, state = prefs)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LightchatApp(
+                            container = container,
+                            state = prefs,
+                            updateViewModel = updateViewModel,
+                        )
+                        UpdateDialogHost(updateViewModel)
+                    }
                 }
             }
         }
@@ -61,7 +74,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun LightchatApp(container: AppContainer, state: PrefsState?) {
+private fun LightchatApp(
+    container: AppContainer,
+    state: PrefsState?,
+    updateViewModel: UpdateViewModel,
+) {
     if (state == null) {
         SplashScreen()
         return
@@ -78,7 +95,11 @@ private fun LightchatApp(container: AppContainer, state: PrefsState?) {
 
         state.token.isNullOrBlank() -> AuthScreen(serverUrl = baseUrl)
 
-        else -> MainNavHost(container = container, prefs = state)
+        else -> MainNavHost(
+            container = container,
+            prefs = state,
+            updateViewModel = updateViewModel,
+        )
     }
 }
 

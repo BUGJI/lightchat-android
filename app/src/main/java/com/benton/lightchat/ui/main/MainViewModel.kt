@@ -20,6 +20,7 @@ data class MainUiState(
     val privateChats: List<PrivateChatDto> = emptyList(),
     val loading: Boolean = true,
     val refreshing: Boolean = false,
+    val offline: Boolean = false,
     val error: String? = null,
 )
 
@@ -41,7 +42,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun pollLoop() {
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
-            loadLists(showLoading = false)
+            val online = loadLists(showLoading = false)
+            _state.update { it.copy(offline = !online) }
             delay(3000)
         }
     }
@@ -63,24 +65,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(error = null) }
     }
 
-    private suspend fun loadLists(showLoading: Boolean, userInitiated: Boolean = false) {
+    private suspend fun loadLists(showLoading: Boolean, userInitiated: Boolean = false): Boolean {
         if (showLoading) {
             _state.update { it.copy(loading = true) }
         } else if (userInitiated) {
             _state.update { it.copy(refreshing = true) }
         }
 
-        when (val result = chatRepository.sync(lists = true)) {
+        return when (val result = chatRepository.sync(lists = true)) {
             is ApiResult.Success -> {
                 val data = result.data
                 _state.update {
                     it.copy(
                         loading = false,
                         refreshing = false,
+                        offline = false,
                         channels = data?.channels ?: it.channels,
                         privateChats = data?.privateChats ?: it.privateChats,
                     )
                 }
+                true
             }
 
             is ApiResult.Failure -> {
@@ -91,6 +95,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         error = if (userInitiated || showLoading) result.message else it.error,
                     )
                 }
+                false
             }
         }
     }

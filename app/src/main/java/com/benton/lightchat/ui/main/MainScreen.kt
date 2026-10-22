@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Groups
@@ -28,7 +29,10 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -47,6 +51,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,7 +74,11 @@ import com.benton.lightchat.data.remote.ChannelDto
 import com.benton.lightchat.data.remote.PrivateChatDto
 import com.benton.lightchat.ui.components.EmptyState
 import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.OfflineBanner
 import com.benton.lightchat.ui.components.UserAvatar
+import com.benton.lightchat.ui.contacts.FriendsEvent
+import com.benton.lightchat.ui.contacts.FriendsUiState
+import com.benton.lightchat.ui.contacts.FriendsViewModel
 import com.benton.lightchat.ui.profile.ProfileScreen
 import com.benton.lightchat.util.TimeFormat
 
@@ -90,17 +99,41 @@ fun MainScreen(
     onOpenSettings: () -> Unit,
     onEditProfile: () -> Unit,
     viewModel: MainViewModel = viewModel(),
+    friendsViewModel: FriendsViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val friendsState by friendsViewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(Unit) { viewModel.start() }
+    LaunchedEffect(Unit) {
+        viewModel.start()
+        friendsViewModel.start()
+    }
 
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             viewModel.pollLoop()
+        }
+    }
+
+    LaunchedEffect(lifecycleOwner, selectedTab) {
+        if (selectedTab == 1) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                friendsViewModel.load()
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        friendsViewModel.events.collect { event ->
+            when (event) {
+                is FriendsEvent.OpenPrivateChat ->
+                    onOpenPrivate(event.chatId, event.userId, event.title)
+
+                is FriendsEvent.ShowMessage -> snackbarHostState.showSnackbar(event.text)
+            }
         }
     }
 
@@ -109,6 +142,18 @@ fun MainScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+
+    LaunchedEffect(friendsState.error) {
+        friendsState.error?.let {
+            snackbarHostState.showSnackbar(it)
+            friendsViewModel.clearError()
+        }
+    }
+
+    val refreshAll = {
+        viewModel.refresh()
+        if (selectedTab == 1) friendsViewModel.load()
     }
 
     val title = when (selectedTab) {
@@ -123,13 +168,39 @@ fun MainScreen(
                 title = { Text(title) },
                 actions = {
                     if (selectedTab == 0 || selectedTab == 1) {
-                        IconButton(onClick = { viewModel.refresh() }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        IconButton(
+                            onClick = refreshAll,
+                            enabled = !state.refreshing,
+                        ) {
+                            if (state.refreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                            }
                         }
                     }
                     if (selectedTab == 1) {
-                        IconButton(onClick = onOpenFriends) {
-                            Icon(Icons.Filled.Group, contentDescription = "好友管理")
+                        BadgedBox(
+                            badge = {
+                                if (friendsState.requests.isNotEmpty()) {
+                                    Badge {
+                                        Text(
+                                            if (friendsState.requests.size > 99) {
+                                                "99+"
+                                            } else {
+                                                friendsState.requests.size.toString()
+                                            },
+                                        )
+                                    }
+                                }
+                            },
+                        ) {
+                            IconButton(onClick = onOpenFriends) {
+                                Icon(Icons.Filled.Group, contentDescription = "好友管理")
+                            }
                         }
                         IconButton(onClick = onOpenAdd) {
                             Icon(Icons.Filled.PersonAdd, contentDescription = "添加好友或群聊")
@@ -162,31 +233,54 @@ fun MainScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        Box(Modifier.padding(padding)) {
-            when (selectedTab) {
-                0 -> MessagesTab(
-                    state = state,
-                    baseUrl = baseUrl,
-                    onOpenChannel = onOpenChannel,
-                    onOpenPrivate = onOpenPrivate,
-                    onOpenAdd = onOpenAdd,
-                    onLeaveChannel = viewModel::leaveChannel,
-                )
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize(),
+        ) {
+            if (state.offline) {
+                OfflineBanner()
+            }
+            Box(Modifier.weight(1f)) {
+                when (selectedTab) {
+                    0 -> PullToRefreshBox(
+                        isRefreshing = state.refreshing,
+                        onRefresh = viewModel::refresh,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        MessagesTab(
+                            state = state,
+                            baseUrl = baseUrl,
+                            onOpenChannel = onOpenChannel,
+                            onOpenPrivate = onOpenPrivate,
+                            onOpenAdd = onOpenAdd,
+                            onLeaveChannel = viewModel::leaveChannel,
+                        )
+                    }
 
-                1 -> ContactsTab(
-                    state = state,
-                    baseUrl = baseUrl,
-                    onOpenChannel = onOpenChannel,
-                    onOpenPrivate = onOpenPrivate,
-                    onOpenAdd = onOpenAdd,
-                    onLeaveChannel = viewModel::leaveChannel,
-                )
+                    1 -> PullToRefreshBox(
+                        isRefreshing = state.refreshing,
+                        onRefresh = refreshAll,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        ContactsTab(
+                            state = state,
+                            friendsState = friendsState,
+                            baseUrl = baseUrl,
+                            onOpenChannel = onOpenChannel,
+                            onOpenAdd = onOpenAdd,
+                            onOpenFriends = onOpenFriends,
+                            onOpenFriend = friendsViewModel::openChat,
+                            onLeaveChannel = viewModel::leaveChannel,
+                        )
+                    }
 
-                else -> ProfileScreen(
-                    baseUrl = baseUrl,
-                    onEditProfile = onEditProfile,
-                    onOpenSettings = onOpenSettings,
-                )
+                    else -> ProfileScreen(
+                        baseUrl = baseUrl,
+                        onEditProfile = onEditProfile,
+                        onOpenSettings = onOpenSettings,
+                    )
+                }
             }
         }
     }
@@ -280,13 +374,16 @@ private fun MessagesTab(
 @Composable
 private fun ContactsTab(
     state: MainUiState,
+    friendsState: FriendsUiState,
     baseUrl: String?,
     onOpenChannel: (Long, String) -> Unit,
-    onOpenPrivate: (Long, Long, String) -> Unit,
     onOpenAdd: () -> Unit,
+    onOpenFriends: () -> Unit,
+    onOpenFriend: (Long, String) -> Unit,
     onLeaveChannel: (ChannelDto) -> Unit,
 ) {
     var section by rememberSaveable { mutableIntStateOf(0) }
+    val joinedChannels = state.channels.filter { it.isJoined }
 
     Column(Modifier.fillMaxSize()) {
         SingleChoiceSegmentedButtonRow(
@@ -298,55 +395,118 @@ private fun ContactsTab(
                 selected = section == 0,
                 onClick = { section = 0 },
                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                label = { Text("私聊") },
+                label = { Text("好友 ${friendsState.friends.size}") },
             )
             SegmentedButton(
                 selected = section == 1,
                 onClick = { section = 1 },
                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                label = { Text("群聊") },
+                label = { Text("群聊 ${joinedChannels.size}") },
             )
         }
 
-        if (state.loading) {
-            LoadingBox()
-            return@Column
-        }
-
         if (section == 0) {
-            if (state.privateChats.isEmpty()) {
-                EmptyState(
-                    icon = Icons.AutoMirrored.Filled.Chat,
-                    title = "还没有私聊",
-                    description = "去添加好友，开始一段对话",
+            when {
+                friendsState.loading && friendsState.friends.isEmpty() -> LoadingBox()
+
+                friendsState.friends.isEmpty() && friendsState.requests.isEmpty() -> EmptyState(
+                    icon = Icons.Filled.People,
+                    title = "还没有好友",
+                    description = "添加好友后，可以在这里快速发起聊天",
                     actionLabel = "添加好友",
                     onAction = onOpenAdd,
                 )
-            } else {
-                LazyColumn(
+
+                else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 12.dp),
                 ) {
-                    items(state.privateChats, key = { it.id }) { chat ->
-                        val displayName = chat.otherNickname?.takeIf { it.isNotBlank() }
-                            ?: chat.otherUsername
-                        PrivateChatRow(
-                            name = displayName,
-                            avatarUrl = chat.otherAvatar,
-                            baseUrl = baseUrl,
-                            preview = chat.lastMessage ?: "开始聊天吧",
-                            time = TimeFormat.chatTimestamp(chat.lastMessageAt),
-                            unread = chat.unreadCount,
-                            muted = chat.dnd > 0,
-                            onClick = { onOpenPrivate(chat.id, chat.otherUserId, displayName) },
-                        )
+                    if (friendsState.requests.isNotEmpty()) {
+                        item(key = "friend_requests") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenFriends)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PersonAdd,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "好友申请",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Badge {
+                                    Text(
+                                        if (friendsState.requests.size > 99) {
+                                            "99+"
+                                        } else {
+                                            friendsState.requests.size.toString()
+                                        },
+                                    )
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                    items(friendsState.friends, key = { it.userId }) { friend ->
+                        val displayName = friend.nickname.takeIf { it.isNotBlank() }
+                            ?: friend.username
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenFriend(friend.userId, displayName) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            UserAvatar(
+                                name = displayName,
+                                avatarUrl = friend.avatar,
+                                baseUrl = baseUrl,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = displayName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "@${friend.username}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         HorizontalDivider(modifier = Modifier.padding(start = 76.dp))
                     }
                 }
             }
         } else {
-            val joinedChannels = state.channels.filter { it.isJoined }
-            if (joinedChannels.isEmpty()) {
+            if (state.loading) {
+                LoadingBox()
+            } else if (joinedChannels.isEmpty()) {
                 EmptyState(
                     icon = Icons.Filled.Groups,
                     title = "还没有群聊",
@@ -410,6 +570,7 @@ private fun ChannelRow(
     onLeave: (() -> Unit)? = null,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var confirmLeave by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -495,15 +656,38 @@ private fun ChannelRow(
                     onDismissRequest = { menuExpanded = false },
                 ) {
                     DropdownMenuItem(
-                        text = { Text("退出群聊") },
+                        text = {
+                            Text("退出群聊", color = MaterialTheme.colorScheme.error)
+                        },
                         onClick = {
                             menuExpanded = false
-                            onLeave()
+                            confirmLeave = true
                         },
                     )
                 }
             }
         }
+    }
+
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text("退出群聊") },
+            text = { Text("退出后将不再接收「${channel.displayName}」的消息，确定退出？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmLeave = false
+                        onLeave?.invoke()
+                    },
+                ) {
+                    Text("退出", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLeave = false }) { Text("取消") }
+            },
+        )
     }
 }
 
