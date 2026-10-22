@@ -4,6 +4,12 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val releaseVersionName = providers.environmentVariable("VERSION_NAME").orNull
+val releaseVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull()
+val releaseKeystorePath = providers.environmentVariable("KEYSTORE_FILE").orNull
+val releaseKeystoreFile = releaseKeystorePath?.takeIf { it.isNotBlank() }?.let { rootProject.file(it) }
+val hasReleaseKeystore = releaseKeystoreFile?.exists() == true
+
 android {
     namespace = "com.benton.lightchat"
     compileSdk {
@@ -14,14 +20,28 @@ android {
         applicationId = "com.benton.lightchat"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = releaseVersionCode ?: 1
+        versionName = releaseVersionName ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        releaseKeystoreFile?.takeIf { it.exists() }?.let { keystore ->
+            create("release") {
+                storeFile = keystore
+                storePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
