@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 
 data class SessionsUiState(
     val loading: Boolean = true,
+    val loaded: Boolean = false,
+    val refreshing: Boolean = false,
     val sessions: List<SessionDto> = emptyList(),
     val actionInProgress: Boolean = false,
     val info: String? = null,
@@ -27,16 +29,35 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(SessionsUiState())
     val state: StateFlow<SessionsUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            userRepository.observeSessions().collect { sessions ->
+                if (sessions != null) {
+                    _state.update {
+                        it.copy(loading = false, loaded = true, sessions = sessions)
+                    }
+                }
+            }
+        }
+    }
+
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = it.sessions.isEmpty(), error = null) }
+            _state.update {
+                it.copy(loading = !it.loaded, refreshing = it.loaded, error = null)
+            }
             when (val result = userRepository.sessions()) {
                 is ApiResult.Success -> _state.update {
-                    it.copy(loading = false, sessions = result.data.orEmpty())
+                    it.copy(
+                        loading = false,
+                        loaded = true,
+                        refreshing = false,
+                        sessions = result.data.orEmpty(),
+                    )
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }

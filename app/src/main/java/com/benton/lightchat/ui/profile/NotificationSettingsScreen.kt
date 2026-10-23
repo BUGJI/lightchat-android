@@ -53,7 +53,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.FormSkeleton
+import com.benton.lightchat.ui.components.InlineSyncBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,7 +88,7 @@ fun NotificationSettingsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (state.loading) {
-            LoadingBox(Modifier.padding(padding))
+            FormSkeleton(Modifier.padding(padding), blocks = 3)
             return@Scaffold
         }
 
@@ -100,6 +101,7 @@ fun NotificationSettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            InlineSyncBar(visible = state.refreshing)
             Card(Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(16.dp),

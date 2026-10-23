@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 
 data class TwoFactorUiState(
     val loading: Boolean = true,
+    val loaded: Boolean = false,
+    val refreshing: Boolean = false,
     val enabled: Boolean = false,
     val configured: Boolean = false,
     val setup: TwoFactorData? = null,
@@ -32,20 +34,45 @@ class TwoFactorViewModel(application: Application) : AndroidViewModel(applicatio
     private val _state = MutableStateFlow(TwoFactorUiState())
     val state: StateFlow<TwoFactorUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            userRepository.observeTwoFactor().collect { data ->
+                if (data != null) {
+                    _state.update {
+                        if (it.loaded) {
+                            it
+                        } else {
+                            it.copy(
+                                loading = false,
+                                loaded = true,
+                                enabled = data.enabled,
+                                configured = data.configured,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                it.copy(loading = !it.loaded, refreshing = it.loaded, error = null)
+            }
             when (val result = userRepository.twoFactorStatus()) {
                 is ApiResult.Success -> _state.update {
                     it.copy(
                         loading = false,
+                        loaded = true,
+                        refreshing = false,
                         enabled = result.data?.enabled == true,
                         configured = result.data?.configured == true,
                     )
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }

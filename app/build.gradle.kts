@@ -21,8 +21,8 @@ android {
         applicationId = "com.benton.lightchat"
         minSdk = 24
         targetSdk = 37
-        versionCode = releaseVersionCode ?: 10003
-        versionName = releaseVersionName ?: "1.0.3"
+        versionCode = releaseVersionCode ?: 10004
+        versionName = releaseVersionName ?: "1.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -77,6 +77,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.navigationevent)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

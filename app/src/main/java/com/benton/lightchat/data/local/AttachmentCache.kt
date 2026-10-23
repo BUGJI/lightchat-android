@@ -17,18 +17,50 @@ class AttachmentCache(
 ) {
 
     private val directory = File(context.filesDir, "attachments").apply { mkdirs() }
+    private val byHash = java.util.concurrent.ConcurrentHashMap<String, File>()
+    private val indexLock = Any()
+    @Volatile
+    private var indexed = false
 
     fun cachedFile(url: String, fileNameHint: String? = null): File? {
         if (url.isBlank()) return null
-        val file = fileFor(url, fileNameHint)
-        return file.takeIf { it.exists() && it.length() > 0 }?.also {
+        val key = hash(url)
+        byHash[key]?.let { cached ->
+            if (cached.exists() && cached.length() > 0) {
+                return cached.also { it.setLastModified(System.currentTimeMillis()) }
+            }
+            byHash.remove(key, cached)
+        }
+        val direct = fileFor(url, fileNameHint)
+        if (direct.exists() && direct.length() > 0) {
+            byHash[key] = direct
+            return direct.also { it.setLastModified(System.currentTimeMillis()) }
+        }
+        ensureIndex()
+        return byHash[key]?.takeIf { it.exists() && it.length() > 0 }?.also {
             it.setLastModified(System.currentTimeMillis())
+        }
+    }
+
+    private fun ensureIndex() {
+        if (indexed) return
+        synchronized(indexLock) {
+            if (indexed) return
+            directory.listFiles()?.forEach { file ->
+                if (file.isFile && file.length() > 0) {
+                    val name = file.name.substringBefore('.')
+                    if (name.length == 64) byHash[name] = file
+                }
+            }
+            indexed = true
         }
     }
 
     fun delete(url: String) {
         if (url.isBlank()) return
-        runCatching { fileFor(url, null).delete() }
+        val key = hash(url)
+        val cached = byHash.remove(key)
+        runCatching { (cached ?: fileFor(url, null)).delete() }
     }
 
     suspend fun download(
@@ -37,6 +69,10 @@ class AttachmentCache(
         onProgress: (Float) -> Unit = {},
     ): ApiResult<File> = withContext(Dispatchers.IO) {
         if (url.isBlank()) return@withContext ApiResult.Failure("invalid_url", "文件地址无效")
+        cachedFile(url, fileNameHint)?.let { cached ->
+            onProgress(1f)
+            return@withContext ApiResult.Success(cached)
+        }
         val target = fileFor(url, fileNameHint)
         if (target.exists() && target.length() > 0) {
             onProgress(1f)
@@ -84,6 +120,7 @@ class AttachmentCache(
                 return@withContext ApiResult.Failure("download_failed", "无法保存文件")
             }
             target.setLastModified(System.currentTimeMillis())
+            byHash[hash(url)] = target
             evictIfNeeded()
             onProgress(1f)
             ApiResult.Success(target)
@@ -100,8 +137,8 @@ class AttachmentCache(
 
     fun copyFromUri(uri: Uri, url: String, fileNameHint: String?, resolver: android.content.ContentResolver) {
         if (url.isBlank()) return
+        if (cachedFile(url, fileNameHint) != null) return
         val target = fileFor(url, fileNameHint)
-        if (target.exists() && target.length() > 0) return
         runCatching {
             target.parentFile?.mkdirs()
             val temp = File(target.parentFile, "${target.name}.part")
@@ -112,6 +149,7 @@ class AttachmentCache(
                 if (target.exists()) target.delete()
                 temp.renameTo(target)
                 target.setLastModified(System.currentTimeMillis())
+                byHash[hash(url)] = target
                 evictIfNeeded()
             } else {
                 temp.delete()
@@ -121,8 +159,8 @@ class AttachmentCache(
 
     fun copyFromFile(source: File, url: String, fileNameHint: String?) {
         if (url.isBlank() || !source.exists()) return
+        if (cachedFile(url, fileNameHint) != null) return
         val target = fileFor(url, fileNameHint)
-        if (target.exists() && target.length() > 0) return
         runCatching {
             target.parentFile?.mkdirs()
             val temp = File(target.parentFile, "${target.name}.part")
@@ -133,6 +171,7 @@ class AttachmentCache(
                 if (target.exists()) target.delete()
                 temp.renameTo(target)
                 target.setLastModified(System.currentTimeMillis())
+                byHash[hash(url)] = target
                 evictIfNeeded()
             } else {
                 temp.delete()
@@ -147,13 +186,18 @@ class AttachmentCache(
         for (file in files.sortedBy { it.lastModified() }) {
             if (total <= TARGET_TOTAL_BYTES) break
             val length = file.length()
-            if (file.delete()) total -= length
+            if (file.delete()) {
+                total -= length
+                byHash.remove(file.name.substringBefore('.'))
+            }
         }
     }
 
     fun clear() {
         directory.deleteRecursively()
         directory.mkdirs()
+        byHash.clear()
+        indexed = false
     }
 
     fun sizeBytes(): Long = directorySize(directory)

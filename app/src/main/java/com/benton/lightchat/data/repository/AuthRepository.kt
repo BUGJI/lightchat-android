@@ -1,6 +1,8 @@
 package com.benton.lightchat.data.repository
 
+import com.benton.lightchat.data.local.AccountKey
 import com.benton.lightchat.data.local.AppPreferences
+import com.benton.lightchat.data.local.cache.SnapshotStore
 import com.benton.lightchat.data.remote.AccountData
 import com.benton.lightchat.data.remote.ApiExecutor
 import com.benton.lightchat.data.remote.ApiResult
@@ -19,6 +21,7 @@ class AuthRepository(
     private val executor: ApiExecutor,
     private val preferences: AppPreferences,
     private val tokenStore: TokenStore,
+    private val snapshotStore: SnapshotStore,
 ) {
 
     suspend fun login(username: String, password: String): ApiResult<AccountData> {
@@ -36,14 +39,22 @@ class AuthRepository(
     }
 
     suspend fun logout() {
+        preferences.disableAutoLogin()
         runCatching { executor.execute { service -> service.logout() } }
+        clearCachedPages()
         preferences.clearSession()
         tokenStore.token = null
     }
 
     suspend fun clearSession() {
+        clearCachedPages()
         preferences.clearSession()
         tokenStore.token = null
+    }
+
+    private suspend fun clearCachedPages() {
+        val prefs = preferences.current()
+        AccountKey.of(prefs.baseUrl, prefs.userId)?.let { snapshotStore.clearOwner(it) }
     }
 
     suspend fun forgotPassword(account: String): ApiResult<ForgotPasswordData> =

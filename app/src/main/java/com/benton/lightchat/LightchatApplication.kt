@@ -9,10 +9,14 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.benton.lightchat.data.local.AttachmentCache
+import com.benton.lightchat.data.local.AttachmentCacheInterceptor
 import com.benton.lightchat.data.local.ChatDatabase
 import com.benton.lightchat.data.local.ChatLocalStore
 import com.benton.lightchat.data.local.StorageManager
 import com.benton.lightchat.data.local.AppPreferences
+import com.benton.lightchat.data.local.cache.CacheDatabase
+import com.benton.lightchat.data.local.cache.SnapshotStore
+import com.benton.lightchat.data.cache.CacheWarmer
 import com.benton.lightchat.data.remote.ApiClient
 import com.benton.lightchat.data.remote.ApiExecutor
 import com.benton.lightchat.data.remote.TokenStore
@@ -41,9 +45,14 @@ class AppContainer(application: Application) {
 
     val chatDatabase = ChatDatabase.create(application)
     val chatLocalStore = ChatLocalStore(chatDatabase)
+    val cacheDatabase = CacheDatabase.create(application)
+    val snapshotStore = SnapshotStore(cacheDatabase)
     val attachmentCache = AttachmentCache(application, apiClient.httpClient)
 
     val imageLoader: ImageLoader = ImageLoader.Builder(application)
+        .components {
+            add(AttachmentCacheInterceptor(attachmentCache))
+        }
         .diskCache {
             DiskCache.Builder()
                 .directory(File(application.filesDir, "image_cache"))
@@ -62,17 +71,19 @@ class AppContainer(application: Application) {
     val storageManager = StorageManager(
         context = application,
         database = chatDatabase,
+        cacheDatabase = cacheDatabase,
         imageLoader = imageLoader,
         attachmentCache = attachmentCache,
     )
 
-    val authRepository = AuthRepository(executor, preferences, tokenStore)
+    val authRepository = AuthRepository(executor, preferences, tokenStore, snapshotStore)
     val chatRepository = ChatRepository(
         context = application,
         executor = executor,
         preferences = preferences,
         localStore = chatLocalStore,
         attachmentCache = attachmentCache,
+        snapshotStore = snapshotStore,
     )
     val sendQueue = SendQueue(
         scope = scope,
@@ -87,9 +98,18 @@ class AppContainer(application: Application) {
         preferences = preferences,
         sendQueue = sendQueue,
     )
-    val userRepository = UserRepository(executor)
-    val friendRepository = FriendRepository(executor)
-    val serverRepository = ServerRepository(apiClient, executor)
+    val userRepository = UserRepository(executor, preferences, snapshotStore)
+    val friendRepository = FriendRepository(executor, preferences, snapshotStore)
+    val serverRepository = ServerRepository(apiClient, executor, preferences, snapshotStore)
+    val cacheWarmer = CacheWarmer(
+        scope = scope,
+        preferences = preferences,
+        snapshotStore = snapshotStore,
+        userRepository = userRepository,
+        friendRepository = friendRepository,
+        chatRepository = chatRepository,
+        serverRepository = serverRepository,
+    )
     val updateRepository = UpdateRepository(application)
 
     init {

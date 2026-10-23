@@ -48,6 +48,7 @@ class ServerConfigViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             _state.update { it.copy(saving = true, error = null) }
             if (clearSessionOnSave) {
+                container.preferences.disableAutoLogin()
                 container.authRepository.clearSession()
             }
             container.preferences.setServer(normalized)

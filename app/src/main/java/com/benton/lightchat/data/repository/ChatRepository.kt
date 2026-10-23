@@ -5,11 +5,14 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import com.benton.lightchat.data.local.AccountKey
 import com.benton.lightchat.data.local.AppPreferences
 import com.benton.lightchat.data.local.AttachmentCache
 import com.benton.lightchat.data.local.ChatLocalStore
 import com.benton.lightchat.data.local.ConversationCursor
 import com.benton.lightchat.data.local.ConversationRef
+import com.benton.lightchat.data.local.cache.CacheKeys
+import com.benton.lightchat.data.local.cache.SnapshotStore
 import com.benton.lightchat.data.local.toDto
 import com.benton.lightchat.data.remote.ApiExecutor
 import com.benton.lightchat.data.remote.ApiResult
@@ -44,7 +47,10 @@ import com.benton.lightchat.data.remote.UploadData
 import com.benton.lightchat.util.ImageCompressor
 import com.benton.lightchat.util.UrlUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
@@ -57,16 +63,37 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ChatRepository(
     private val context: Context,
     private val executor: ApiExecutor,
     private val preferences: AppPreferences,
     private val localStore: ChatLocalStore,
     private val attachmentCache: AttachmentCache,
+    private val snapshotStore: SnapshotStore,
 ) {
+
+    private val ownerKeyFlow = preferences.stateFlow
+        .map { AccountKey.of(it.baseUrl, it.userId) }
+        .distinctUntilChanged()
 
     fun observeChannels(ownerKey: String): Flow<List<ChannelDto>> =
         localStore.observeChannels(ownerKey).map { items -> items.map { it.toDto() } }
+
+    fun observeDiscoverableChannels(): Flow<List<ChannelDto>?> =
+        ownerKeyFlow.flatMapLatest { ownerKey ->
+            snapshotStore.observe(ownerKey, CacheKeys.DISCOVER_CHANNELS, ChannelsData.serializer())
+                .map { it?.channels }
+        }
+
+    fun observeChannelInfo(channelId: Long): Flow<ChannelMembersData?> =
+        ownerKeyFlow.flatMapLatest { ownerKey ->
+            snapshotStore.observe(
+                ownerKey,
+                CacheKeys.channelInfo(channelId),
+                ChannelMembersData.serializer(),
+            )
+        }
 
     suspend fun channel(ownerKey: String, channelId: Long): ChannelDto? =
         localStore.channel(ownerKey, channelId)
@@ -327,15 +354,11 @@ class ChatRepository(
         val baseUrl = preferences.current().baseUrl
         val resolved = UrlUtils.resolve(baseUrl, url)
             ?: return ApiResult.Failure("invalid_url", "文件地址无效")
-        return attachmentCache.download(resolved, fileNameHint, onProgress)
-    }
-
-    suspend fun cacheUploadedAttachment(uri: Uri, url: String, fileNameHint: String?) {
-        withContext(Dispatchers.IO) {
-            val baseUrl = preferences.current().baseUrl
-            val resolved = UrlUtils.resolve(baseUrl, url) ?: return@withContext
-            attachmentCache.copyFromUri(uri, resolved, fileNameHint, context.contentResolver)
+        attachmentCache.cachedFile(resolved)?.let { file ->
+            onProgress(1f)
+            return ApiResult.Success(file)
         }
+        return attachmentCache.download(resolved, fileNameHint, onProgress)
     }
 
     suspend fun uploadVoice(
@@ -402,7 +425,17 @@ class ChatRepository(
     suspend fun channels(): ApiResult<List<ChannelDto>> {
         val result = executor.execute { service -> service.channels() }
         return when (result) {
-            is ApiResult.Success -> ApiResult.Success((result.data as ChannelsData?)?.channels.orEmpty())
+            is ApiResult.Success -> {
+                val channels = (result.data as ChannelsData?)?.channels.orEmpty()
+                snapshotStore.write(
+                    ownerKey(),
+                    CacheKeys.DISCOVER_CHANNELS,
+                    ChannelsData.serializer(),
+                    ChannelsData(channels),
+                )
+                ApiResult.Success(channels)
+            }
+
             is ApiResult.Failure -> result
         }
     }
@@ -489,11 +522,19 @@ class ChatRepository(
         service.createChannel(CreateChannelRequest(name, displayName, type, description))
     }
 
-    suspend fun joinChannel(channelId: Long): ApiResult<EmptyData> =
-        executor.execute { service -> service.joinChannel(ChannelIdRequest(channelId)) }
+    suspend fun joinChannel(channelId: Long): ApiResult<EmptyData> {
+        val result = executor.execute { service -> service.joinChannel(ChannelIdRequest(channelId)) }
+        if (result is ApiResult.Success) {
+            snapshotStore.delete(ownerKey(), CacheKeys.DISCOVER_CHANNELS)
+        }
+        return result
+    }
 
-    suspend fun leaveChannel(channelId: Long): ApiResult<EmptyData> =
-        executor.execute { service -> service.leaveChannel(ChannelIdRequest(channelId)) }
+    suspend fun leaveChannel(channelId: Long): ApiResult<EmptyData> {
+        val result = executor.execute { service -> service.leaveChannel(ChannelIdRequest(channelId)) }
+        if (result is ApiResult.Success) invalidateChannelInfo(channelId)
+        return result
+    }
 
     suspend fun createPrivateChat(userId: Long): ApiResult<CreatePrivateData> =
         executor.execute { service -> service.createPrivateChat(CreatePrivateRequest(userId)) }
@@ -523,15 +564,31 @@ class ChatRepository(
             )
         }
 
-    suspend fun channelMembers(channelId: Long): ApiResult<ChannelMembersData> =
-        executor.execute { service -> service.channelMembers(channelId) }
+    suspend fun channelMembers(channelId: Long): ApiResult<ChannelMembersData> {
+        val result = executor.execute { service -> service.channelMembers(channelId) }
+        if (result is ApiResult.Success) {
+            result.data?.let {
+                snapshotStore.write(
+                    ownerKey(),
+                    CacheKeys.channelInfo(channelId),
+                    ChannelMembersData.serializer(),
+                    it,
+                )
+            }
+        }
+        return result
+    }
 
     suspend fun inviteChannel(
         channelId: Long,
         username: String? = null,
         userId: Long? = null,
-    ): ApiResult<EmptyData> = executor.execute { service ->
-        service.inviteChannel(InviteChannelRequest(channelId, username, userId))
+    ): ApiResult<EmptyData> {
+        val result = executor.execute { service ->
+            service.inviteChannel(InviteChannelRequest(channelId, username, userId))
+        }
+        if (result is ApiResult.Success) invalidateChannelInfo(channelId)
+        return result
     }
 
     suspend fun updateChannel(
@@ -539,12 +596,21 @@ class ChatRepository(
         displayName: String? = null,
         type: String? = null,
         description: String? = null,
-    ): ApiResult<EmptyData> = executor.execute { service ->
-        service.updateChannel(UpdateChannelRequest(channelId, displayName, type, description))
+    ): ApiResult<EmptyData> {
+        val result = executor.execute { service ->
+            service.updateChannel(UpdateChannelRequest(channelId, displayName, type, description))
+        }
+        if (result is ApiResult.Success) invalidateChannelInfo(channelId)
+        return result
     }
 
-    suspend fun deleteChannel(channelId: Long): ApiResult<JsonElement> =
-        executor.execute { service -> service.deleteChannel(DeleteChannelRequest(channelId)) }
+    suspend fun deleteChannel(channelId: Long): ApiResult<JsonElement> {
+        val result = executor.execute { service ->
+            service.deleteChannel(DeleteChannelRequest(channelId))
+        }
+        if (result is ApiResult.Success) invalidateChannelInfo(channelId)
+        return result
+    }
 
     suspend fun searchChannelMessages(
         channelId: Long,
@@ -570,16 +636,29 @@ class ChatRepository(
         action: String,
         role: String? = null,
         durationMinutes: Int? = null,
-    ): ApiResult<MemberActionResult> = executor.execute { service ->
-        service.memberAction(
-            MemberActionRequest(
-                channelId = channelId,
-                userId = userId,
-                action = action,
-                role = role,
-                durationMinutes = durationMinutes,
-            ),
-        )
+    ): ApiResult<MemberActionResult> {
+        val result = executor.execute { service ->
+            service.memberAction(
+                MemberActionRequest(
+                    channelId = channelId,
+                    userId = userId,
+                    action = action,
+                    role = role,
+                    durationMinutes = durationMinutes,
+                ),
+            )
+        }
+        if (result is ApiResult.Success) invalidateChannelInfo(channelId)
+        return result
+    }
+
+    private suspend fun invalidateChannelInfo(channelId: Long) {
+        snapshotStore.delete(ownerKey(), CacheKeys.channelInfo(channelId))
+    }
+
+    private suspend fun ownerKey(): String? {
+        val prefs = preferences.current()
+        return AccountKey.of(prefs.baseUrl, prefs.userId)
     }
 
     suspend fun upload(
@@ -630,7 +709,29 @@ class ChatRepository(
                 )
             }
             val part = MultipartBody.Part.createFormData("file", name, body)
-            executor.execute { service -> service.uploadFile(part) }
+            val result = executor.execute { service -> service.uploadFile(part) }
+            if (result is ApiResult.Success) {
+                result.data?.let { data ->
+                    val resolved = UrlUtils.resolve(preferences.current().baseUrl, data.fileUrl)
+                    if (resolved != null) {
+                        if (prepared != null) {
+                            attachmentCache.copyFromFile(
+                                prepared.file,
+                                resolved,
+                                data.fileName.ifBlank { prepared.name },
+                            )
+                        } else {
+                            attachmentCache.copyFromUri(
+                                uri,
+                                resolved,
+                                data.fileName.ifBlank { name },
+                                resolver,
+                            )
+                        }
+                    }
+                }
+            }
+            result
         } finally {
             prepared?.file?.delete()
         }

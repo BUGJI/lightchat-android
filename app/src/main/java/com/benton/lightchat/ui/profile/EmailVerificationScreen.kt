@@ -34,7 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.FormSkeleton
+import com.benton.lightchat.ui.components.InlineSyncBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +60,7 @@ fun EmailVerificationScreen(
         },
     ) { padding ->
         if (state.loading) {
-            LoadingBox(Modifier.padding(padding))
+            FormSkeleton(Modifier.padding(padding), blocks = 2)
             return@Scaffold
         }
 
@@ -71,6 +72,7 @@ fun EmailVerificationScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            InlineSyncBar(visible = state.refreshing)
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (state.verified) {

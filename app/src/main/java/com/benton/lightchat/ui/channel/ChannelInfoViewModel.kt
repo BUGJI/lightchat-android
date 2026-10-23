@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 
 data class ChannelInfoUiState(
     val loading: Boolean = true,
+    val refreshing: Boolean = false,
     val channel: ChannelInfoDto? = null,
     val members: List<ChannelMemberDto> = emptyList(),
     val actionInProgress: Boolean = false,
@@ -31,17 +32,41 @@ class ChannelInfoViewModel(application: Application) : AndroidViewModel(applicat
     val state: StateFlow<ChannelInfoUiState> = _state.asStateFlow()
 
     private var loadedChannelId = 0L
+    private var observingChannelId = 0L
 
     fun load(channelId: Long) {
         loadedChannelId = channelId
+        if (observingChannelId != channelId) {
+            observingChannelId = channelId
+            viewModelScope.launch {
+                chatRepository.observeChannelInfo(channelId).collect { data ->
+                    if (data != null) {
+                        _state.update {
+                            it.copy(
+                                loading = false,
+                                channel = data.channel,
+                                members = data.members,
+                            )
+                        }
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
-            _state.update { it.copy(loading = it.channel == null, error = null) }
+            _state.update {
+                it.copy(
+                    loading = it.channel == null,
+                    refreshing = it.channel != null,
+                    error = null,
+                )
+            }
             when (val result = chatRepository.channelMembers(channelId)) {
                 is ApiResult.Success -> {
                     val data = result.data
                     _state.update {
                         it.copy(
                             loading = false,
+                            refreshing = false,
                             channel = data?.channel,
                             members = data?.members.orEmpty(),
                         )
@@ -49,7 +74,7 @@ class ChannelInfoViewModel(application: Application) : AndroidViewModel(applicat
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }

@@ -1,5 +1,6 @@
 package com.benton.lightchat.ui.auth
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -39,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,38 +51,84 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.benton.lightchat.ui.navigation.NavMotion
 import com.benton.lightchat.ui.server.ServerConfigScreen
+
+private object AuthRoute {
+    const val Login = "login"
+    const val ForgotPassword = "forgot-password"
+    const val ServerConfig = "server"
+}
 
 @Composable
 fun AuthScreen(
     serverUrl: String,
     viewModel: AuthViewModel = viewModel(),
 ) {
+    val navController = rememberNavController()
+    val layoutDirection = LocalLayoutDirection.current
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshRememberedCredentials()
+    }
+
+    NavHost(
+        navController = navController,
+        startDestination = AuthRoute.Login,
+        modifier = Modifier.fillMaxSize(),
+        enterTransition = { NavMotion.enter(layoutDirection) },
+        exitTransition = { NavMotion.exit(layoutDirection) },
+        popEnterTransition = { NavMotion.popEnter(layoutDirection) },
+        popExitTransition = { NavMotion.popExit(layoutDirection) },
+        predictivePopEnterTransition = { swipeEdge ->
+            NavMotion.predictivePopEnter(swipeEdge)
+        },
+        predictivePopExitTransition = { swipeEdge ->
+            NavMotion.predictivePopExit(swipeEdge)
+        },
+        sizeTransform = null,
+    ) {
+        composable(AuthRoute.Login) {
+            LoginScreen(
+                serverUrl = serverUrl,
+                viewModel = viewModel,
+                onOpenForgotPassword = { navController.navigate(AuthRoute.ForgotPassword) },
+                onOpenServerConfig = { navController.navigate(AuthRoute.ServerConfig) },
+            )
+        }
+        composable(AuthRoute.ForgotPassword) {
+            ForgotPasswordScreen(onBack = { navController.popBackStack() })
+        }
+        composable(AuthRoute.ServerConfig) {
+            ServerConfigScreen(
+                initialUrl = serverUrl,
+                allowBack = true,
+                clearSessionOnSave = false,
+                onSaved = { navController.popBackStack() },
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoginScreen(
+    serverUrl: String,
+    viewModel: AuthViewModel,
+    onOpenForgotPassword: () -> Unit,
+    onOpenServerConfig: () -> Unit,
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var showServerConfig by rememberSaveable { mutableStateOf(false) }
-    var showForgotPassword by rememberSaveable { mutableStateOf(false) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-
-    if (showForgotPassword) {
-        ForgotPasswordScreen(onBack = { showForgotPassword = false })
-        return
-    }
-
-    if (showServerConfig) {
-        ServerConfigScreen(
-            initialUrl = serverUrl,
-            allowBack = true,
-            clearSessionOnSave = false,
-            onSaved = { showServerConfig = false },
-            onBack = { showServerConfig = false },
-        )
-        return
-    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
@@ -97,7 +146,7 @@ fun AuthScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { showServerConfig = true }) {
+            TextButton(onClick = onOpenServerConfig) {
                 Text("更换服务器")
             }
         }
@@ -204,7 +253,9 @@ fun AuthScreen(
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { viewModel.setRememberUsername(!state.rememberUsername) }
+                        .clickable(enabled = !state.loading) {
+                            viewModel.setRememberUsername(!state.rememberUsername)
+                        }
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -237,6 +288,37 @@ fun AuthScreen(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = state.rememberPassword && !state.loading) {
+                        viewModel.setAutoLogin(!state.autoLogin)
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = state.autoLogin,
+                    onCheckedChange = viewModel::setAutoLogin,
+                    enabled = !state.loading && state.rememberPassword,
+                )
+                Column {
+                    Text(
+                        text = "自动登录",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.rememberPassword) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Text(
+                        text = "启动应用后使用已保存的密码自动登录",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -301,7 +383,7 @@ fun AuthScreen(
 
         if (state.mode == AuthMode.Login) {
             TextButton(
-                onClick = { showForgotPassword = true },
+                onClick = onOpenForgotPassword,
                 enabled = !state.loading,
             ) {
                 Text("忘记密码？")

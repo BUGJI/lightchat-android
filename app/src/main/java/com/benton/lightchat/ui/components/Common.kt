@@ -1,18 +1,24 @@
 package com.benton.lightchat.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -131,5 +137,86 @@ fun LoadingBox(modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         CircularProgressIndicator()
+    }
+}
+
+@Composable
+fun InlineSyncBar(visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible = visible) {
+        LinearProgressIndicator(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(2.dp),
+        )
+    }
+}
+
+@Composable
+fun ListSkeleton(
+    modifier: Modifier = Modifier,
+    rows: Int = 6,
+    showAvatar: Boolean = true,
+) {
+    val placeholder = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    Column(modifier.fillMaxSize()) {
+        repeat(rows.coerceAtLeast(1)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (showAvatar) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(placeholder, CircleShape),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.45f)
+                            .height(14.dp)
+                            .background(placeholder, RoundedCornerShape(7.dp)),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.75f)
+                            .height(12.dp)
+                            .background(placeholder, RoundedCornerShape(6.dp)),
+                    )
+                }
+            }
+            HorizontalDivider(
+                modifier = Modifier.padding(start = if (showAvatar) 76.dp else 16.dp),
+                color = placeholder.copy(alpha = 0.35f),
+            )
+        }
+    }
+}
+
+@Composable
+fun FormSkeleton(
+    modifier: Modifier = Modifier,
+    blocks: Int = 3,
+) {
+    val placeholder = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        repeat(blocks.coerceAtLeast(1)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(96.dp)
+                    .background(placeholder, RoundedCornerShape(16.dp)),
+            )
+        }
     }
 }

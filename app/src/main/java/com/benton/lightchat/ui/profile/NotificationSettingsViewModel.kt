@@ -33,6 +33,8 @@ enum class NotificationMode(val value: String, val label: String, val descriptio
 
 data class NotificationSettingsUiState(
     val loading: Boolean = true,
+    val loaded: Boolean = false,
+    val refreshing: Boolean = false,
     val saving: Boolean = false,
     val testing: Boolean = false,
     val mode: NotificationMode = NotificationMode.NONE,
@@ -64,43 +66,71 @@ class NotificationSettingsViewModel(application: Application) : AndroidViewModel
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
+    init {
+        viewModelScope.launch {
+            userRepository.observeProfile().collect { user ->
+                if (user != null && !_state.value.loaded && !_state.value.saving) {
+                    applyUser(user)
+                }
+            }
+        }
+    }
+
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                it.copy(
+                    loading = !it.loaded,
+                    refreshing = it.loaded,
+                    error = null,
+                )
+            }
             when (val result = userRepository.profile()) {
                 is ApiResult.Success -> {
                     val user = result.data
-                    val notification = user?.notification
-                    val template = notification?.template
-                    val accountEmail = user?.email.orEmpty()
-                    val notificationEmail = notification?.email?.takeIf { it.isNotBlank() }
-                        ?: accountEmail
-                    _state.update {
-                        it.copy(
-                            loading = false,
-                            mode = NotificationMode.fromValue(notification?.mode),
-                            accountEmail = accountEmail,
-                            email = notificationEmail,
-                            pushplusKey = notification?.pushplusKey.orEmpty(),
-                            webhookUrl = notification?.webhookUrl.orEmpty(),
-                            webhookSecret = notification?.webhookSecret.orEmpty(),
-                            groupEnabled = notification?.groupEnabled ?: true,
-                            privateEnabled = notification?.privateEnabled ?: true,
-                            emailSubject = template?.email?.subject.orEmpty(),
-                            emailBody = template?.email?.body.orEmpty(),
-                            pushplusTitle = template?.pushplus?.title.orEmpty(),
-                            pushplusContent = template?.pushplus?.content.orEmpty(),
-                            webhookTitle = template?.webhook?.title.orEmpty(),
-                            webhookContent = template?.webhook?.content.orEmpty(),
-                            availableMethods = notification?.availableMethods.orEmpty().toSet(),
-                        )
+                    if (user != null) {
+                        applyUser(user)
+                    } else {
+                        _state.update { it.copy(loading = false, refreshing = false) }
                     }
                 }
 
                 is ApiResult.Failure -> {
-                    _state.update { it.copy(loading = false, error = result.message) }
+                    _state.update {
+                        it.copy(loading = false, refreshing = false, error = result.message)
+                    }
                 }
             }
+        }
+    }
+
+    private fun applyUser(user: com.benton.lightchat.data.remote.UserDto) {
+        val notification = user.notification
+        val template = notification?.template
+        val accountEmail = user.email.orEmpty()
+        val notificationEmail = notification?.email?.takeIf { it.isNotBlank() }
+            ?: accountEmail
+        _state.update {
+            it.copy(
+                loading = false,
+                loaded = true,
+                refreshing = false,
+                mode = NotificationMode.fromValue(notification?.mode),
+                accountEmail = accountEmail,
+                email = notificationEmail,
+                pushplusKey = notification?.pushplusKey.orEmpty(),
+                webhookUrl = notification?.webhookUrl.orEmpty(),
+                webhookSecret = notification?.webhookSecret.orEmpty(),
+                groupEnabled = notification?.groupEnabled ?: true,
+                privateEnabled = notification?.privateEnabled ?: true,
+                emailSubject = template?.email?.subject.orEmpty(),
+                emailBody = template?.email?.body.orEmpty(),
+                pushplusTitle = template?.pushplus?.title.orEmpty(),
+                pushplusContent = template?.pushplus?.content.orEmpty(),
+                webhookTitle = template?.webhook?.title.orEmpty(),
+                webhookContent = template?.webhook?.content.orEmpty(),
+                availableMethods = notification?.availableMethods.orEmpty().toSet(),
+            )
         }
     }
 
@@ -208,6 +238,7 @@ class NotificationSettingsViewModel(application: Application) : AndroidViewModel
         return when (val result = userRepository.updateProfile(request)) {
             is ApiResult.Success -> {
                 _state.update { it.copy(saving = false) }
+                viewModelScope.launch { userRepository.profile() }
                 true
             }
 

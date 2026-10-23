@@ -59,7 +59,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             it.copy(
                                 channels = channels,
                                 privateChats = chats,
-                                loading = it.loading && channels.isEmpty() && chats.isEmpty(),
+                                loading = false,
                             )
                         }
                     }
@@ -68,7 +68,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 syncCoordinator.status.collect { status ->
                     _state.update {
                         it.copy(
-                            loading = if (status.syncing) it.loading else false,
                             refreshing = if (status.syncing) it.refreshing else false,
                             offline = !status.online,
                             friendPending = status.friendPending,
@@ -93,7 +92,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _state.update { current ->
                         current.copy(channels = current.channels.filterNot { it.id == channel.id })
                     }
-                    syncCoordinator.requestSync()
+            syncCoordinator.requestSync()
+            container.cacheWarmer.warm()
                 }
 
                 is ApiResult.Failure -> _state.update { it.copy(error = result.message) }

@@ -12,6 +12,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -110,8 +111,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -123,8 +122,11 @@ import com.benton.lightchat.data.remote.ChannelMemberDto
 import com.benton.lightchat.data.remote.MessageDto
 import com.benton.lightchat.data.remote.ParentMessageDto
 import com.benton.lightchat.ui.components.EmptyState
+import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.LoadingBox
 import com.benton.lightchat.ui.components.OfflineBanner
+import com.benton.lightchat.ui.components.PredictiveBackOverlay
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.util.TimeFormat
 import com.benton.lightchat.util.UrlUtils
@@ -190,6 +192,12 @@ fun ChatScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+
+    BackHandler(
+        enabled = state.replyTo != null && previewUrl == null && !searchOpen,
+    ) {
+        viewModel.clearReply()
     }
 
     Scaffold(
@@ -271,6 +279,7 @@ fun ChatScreen(
             if (state.offline) {
                 OfflineBanner()
             }
+            InlineSyncBar(visible = state.initialSyncing)
             if (target is ChatTarget.Channel && !state.announcement.isNullOrBlank()) {
                 AnnouncementBanner(
                     text = state.announcement.orEmpty(),
@@ -279,7 +288,7 @@ fun ChatScreen(
             }
             Box(Modifier.weight(1f)) {
                 when {
-                    state.loading -> LoadingBox()
+                    state.loading -> ListSkeleton(rows = 4, showAvatar = false)
                     state.messages.isEmpty() -> EmptyState(
                         icon = Icons.Filled.Forum,
                         title = "还没有消息",
@@ -383,7 +392,7 @@ fun ChatScreen(
     }
 
     previewUrl?.let { url ->
-        ImagePreviewDialog(
+        ImagePreviewOverlay(
             url = url,
             onDismiss = { previewUrl = null },
             onShare = { imageUrl ->
@@ -440,7 +449,7 @@ fun ChatScreen(
     }
 
     if (searchOpen) {
-        SearchMessagesDialog(
+        SearchMessagesOverlay(
             query = state.searchQuery,
             results = state.searchResults,
             searching = state.searching,
@@ -494,7 +503,7 @@ private fun AnnouncementBanner(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ImagePreviewDialog(
+private fun ImagePreviewOverlay(
     url: String,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
@@ -502,19 +511,31 @@ private fun ImagePreviewDialog(
 ) {
     var scale by remember(url) { mutableFloatStateOf(1f) }
     var offset by remember(url) { mutableStateOf(Offset.Zero) }
+    val zoomed = scale > 1f
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         val next = (scale * zoomChange).coerceIn(1f, 5f)
         scale = next
         offset = if (next <= 1f) Offset.Zero else offset + panChange
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
+    BackHandler(enabled = zoomed) {
+        scale = 1f
+        offset = Offset.Zero
+    }
+
+    PredictiveBackOverlay(
+        onDismiss = onDismiss,
+        enabled = !zoomed,
+    ) { progress, direction ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    alpha = 1f - progress
+                    scaleX = 1f - progress * 0.08f
+                    scaleY = 1f - progress * 0.08f
+                    translationX = progress * size.width * 0.25f * direction
+                }
                 .background(Color.Black),
         ) {
             AsyncImage(
@@ -580,7 +601,7 @@ private fun ImagePreviewDialog(
 }
 
 @Composable
-private fun SearchMessagesDialog(
+private fun SearchMessagesOverlay(
     query: String,
     results: List<MessageDto>,
     searching: Boolean,
@@ -593,12 +614,23 @@ private fun SearchMessagesDialog(
     onSelect: (MessageDto) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+    PredictiveBackOverlay(onDismiss = onDismiss) { progress, direction ->
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = 1f - progress
+                    scaleX = 1f - progress * 0.06f
+                    scaleY = 1f - progress * 0.06f
+                    translationX = progress * size.width * 0.25f * direction
+                },
+        ) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .imePadding(),
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1450,6 +1482,10 @@ private fun MessageInput(
         recorder.cancel()
         recording = false
         recordSeconds = 0
+    }
+
+    BackHandler(enabled = recording) {
+        cancelRecording()
     }
 
     LaunchedEffect(recording) {

@@ -28,10 +28,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.local.PrefsState
 import com.benton.lightchat.ui.auth.AuthScreen
+import com.benton.lightchat.ui.auth.AuthViewModel
 import com.benton.lightchat.ui.components.UpdateDialogHost
 import com.benton.lightchat.ui.navigation.MainNavHost
 import com.benton.lightchat.ui.profile.UpdateViewModel
 import com.benton.lightchat.ui.server.ServerConfigScreen
+import com.benton.lightchat.ui.theme.AccentColor
 import com.benton.lightchat.ui.theme.LightchatTheme
 import com.benton.lightchat.ui.theme.ThemeMode
 
@@ -54,6 +56,10 @@ class MainActivity : ComponentActivity() {
             LightchatTheme(
                 darkTheme = darkTheme,
                 dynamicColor = prefs?.dynamicColor ?: true,
+                amoled = prefs?.amoledDark ?: false,
+                accentColor = AccentColor.fromValue(prefs?.accentColor),
+                cornerRadius = prefs?.cornerRadius ?: 16,
+                fontScale = prefs?.fontScale ?: 1f,
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -79,12 +85,25 @@ private fun LightchatApp(
     state: PrefsState?,
     updateViewModel: UpdateViewModel,
 ) {
+    val authViewModel: AuthViewModel = viewModel()
+    val authState by authViewModel.state.collectAsStateWithLifecycle()
+
     if (state == null) {
         SplashScreen()
         return
     }
 
     val baseUrl = state.baseUrl?.takeIf { it.isNotBlank() }
+    val token = state.token
+
+    LaunchedEffect(token, baseUrl) {
+        when {
+            baseUrl == null -> Unit
+            !token.isNullOrBlank() -> authViewModel.onSessionActive()
+            state.autoLogin -> authViewModel.tryAutoLogin()
+        }
+    }
+
     when {
         baseUrl == null -> ServerConfigScreen(
             initialUrl = null,
@@ -93,7 +112,15 @@ private fun LightchatApp(
             onSaved = {},
         )
 
-        state.token.isNullOrBlank() -> AuthScreen(serverUrl = baseUrl)
+        token.isNullOrBlank() -> {
+            if (authState.autoLoginRunning || (state.autoLogin && !authState.autoLoginFinished)) {
+                SplashScreen(
+                    message = if (authState.autoLoginRunning) "正在自动登录…" else null,
+                )
+            } else {
+                AuthScreen(serverUrl = baseUrl, viewModel = authViewModel)
+            }
+        }
 
         else -> MainNavHost(
             container = container,
@@ -104,7 +131,7 @@ private fun LightchatApp(
 }
 
 @Composable
-private fun SplashScreen() {
+private fun SplashScreen(message: String? = null) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(
@@ -123,6 +150,13 @@ private fun SplashScreen() {
                     fontWeight = FontWeight.Bold,
                 )
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                if (message != null) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

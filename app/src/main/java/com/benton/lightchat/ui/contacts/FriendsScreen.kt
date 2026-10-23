@@ -60,7 +60,8 @@ import com.benton.lightchat.data.remote.BlockedUserDto
 import com.benton.lightchat.data.remote.FriendDto
 import com.benton.lightchat.data.remote.FriendRequestDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.util.TimeFormat
 
@@ -124,6 +125,7 @@ fun FriendsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            InlineSyncBar(visible = state.refreshing)
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -192,7 +194,7 @@ private fun FriendsList(
     onBlock: (FriendDto) -> Unit,
 ) {
     when {
-        state.loading -> LoadingBox()
+        state.loading -> ListSkeleton()
         state.friends.isEmpty() -> EmptyState(
             icon = Icons.Filled.Group,
             title = "还没有好友",
@@ -319,7 +321,7 @@ private fun RequestsList(
     onRespond: (FriendRequestDto, Boolean) -> Unit,
 ) {
     when {
-        state.loading -> LoadingBox()
+        state.loading -> ListSkeleton()
         state.requests.isEmpty() -> EmptyState(
             icon = Icons.Filled.PersonAdd,
             title = "暂无好友申请",
@@ -405,7 +407,7 @@ private fun BlockedList(
     onUnblock: (BlockedUserDto) -> Unit,
 ) {
     when {
-        state.loading -> LoadingBox()
+        state.loading -> ListSkeleton()
         state.blocked.isEmpty() -> EmptyState(
             icon = Icons.Filled.Block,
             title = "黑名单为空",

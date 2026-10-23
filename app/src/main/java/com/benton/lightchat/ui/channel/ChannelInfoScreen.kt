@@ -59,7 +59,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ChannelInfoDto
 import com.benton.lightchat.data.remote.ChannelMemberDto
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.FormSkeleton
+import com.benton.lightchat.ui.components.InlineSyncBar
 import com.benton.lightchat.ui.components.UserAvatar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,7 +125,7 @@ fun ChannelInfoScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (state.loading) {
-            LoadingBox(Modifier.padding(padding))
+            FormSkeleton(Modifier.padding(padding), blocks = 3)
             return@Scaffold
         }
 
@@ -133,6 +134,7 @@ fun ChannelInfoScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            InlineSyncBar(visible = state.refreshing)
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(

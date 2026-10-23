@@ -65,7 +65,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ChannelDto
 import com.benton.lightchat.data.remote.UserDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.UserAvatar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,6 +126,7 @@ fun AddContactsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            InlineSyncBar(visible = state.refreshing)
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -206,7 +208,7 @@ private fun FriendsSection(
         )
 
         when {
-            state.loading || state.searching -> LoadingBox()
+            state.loading || state.searching -> ListSkeleton(rows = 4)
             users.isEmpty() -> EmptyState(
                 icon = Icons.Filled.People,
                 title = if (state.searchQuery.isBlank()) "暂无用户" else "没有找到相关用户",
@@ -306,7 +308,7 @@ private fun GroupsSection(
         }
 
         when {
-            state.loading -> LoadingBox()
+            state.loading -> ListSkeleton(rows = 4)
             state.channels.isEmpty() -> EmptyState(
                 icon = Icons.Filled.Groups,
                 title = "暂无可加入的群聊",

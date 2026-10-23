@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 
 data class FriendsUiState(
     val loading: Boolean = true,
+    val refreshing: Boolean = false,
     val friends: List<FriendDto> = emptyList(),
     val requests: List<FriendRequestDto> = emptyList(),
     val blocked: List<BlockedUserDto> = emptyList(),
@@ -53,18 +54,37 @@ class FriendsViewModel(application: Application) : AndroidViewModel(application)
     fun start() {
         if (started) return
         started = true
+        viewModelScope.launch {
+            friendRepository.observeFriends().collect { data ->
+                if (data != null) {
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            friends = data.friends,
+                            requests = data.requests,
+                            blocked = data.blocked,
+                        )
+                    }
+                }
+            }
+        }
         load()
     }
 
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = it.friends.isEmpty(), error = null) }
+            _state.update {
+                val hasData = it.friends.isNotEmpty() || it.requests.isNotEmpty() ||
+                    it.blocked.isNotEmpty()
+                it.copy(loading = !hasData, refreshing = hasData, error = null)
+            }
             when (val result = friendRepository.list()) {
                 is ApiResult.Success -> {
                     val data = result.data
                     _state.update {
                         it.copy(
                             loading = false,
+                            refreshing = false,
                             friends = data?.friends.orEmpty(),
                             requests = data?.requests.orEmpty(),
                             blocked = data?.blocked.orEmpty(),
@@ -73,7 +93,7 @@ class FriendsViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }
@@ -94,7 +114,7 @@ class FriendsViewModel(application: Application) : AndroidViewModel(application)
                     _events.emit(
                         FriendsEvent.ShowMessage(if (accept) "已添加为好友" else "已拒绝好友申请"),
                     )
-                    if (accept) load()
+                    load()
                 }
 
                 is ApiResult.Failure -> _state.update {
@@ -117,6 +137,7 @@ class FriendsViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
                     _events.emit(FriendsEvent.ShowMessage("已删除好友"))
+                    load()
                 }
 
                 is ApiResult.Failure -> _state.update {
@@ -162,6 +183,7 @@ class FriendsViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
                     _events.emit(FriendsEvent.ShowMessage("已解除拉黑"))
+                    load()
                 }
 
                 is ApiResult.Failure -> _state.update {

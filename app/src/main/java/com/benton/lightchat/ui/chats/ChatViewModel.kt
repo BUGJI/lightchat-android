@@ -57,6 +57,7 @@ data class ChatUiState(
     val target: ChatTarget? = null,
     val messages: List<MessageDto> = emptyList(),
     val loading: Boolean = true,
+    val initialSyncing: Boolean = false,
     val sending: Boolean = false,
     val uploading: Boolean = false,
     val uploadProgress: Float? = null,
@@ -146,50 +147,69 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             accountKey = key
             val ref = target.toRef()
             conversationRef = ref
-            val draft = chatRepository.draft(key, ref)
-            _state.update { it.copy(draftText = draft?.text.orEmpty()) }
-            if (draft != null && draft.parentId > 0) {
-                chatRepository.message(key, ref, draft.parentId)?.let { parent ->
-                    _state.update { it.copy(replyTo = parent) }
+
+            observeMessages(key, ref)
+
+            launch {
+                val draft = chatRepository.draft(key, ref)
+                _state.update { current ->
+                    if (current.draftText.isBlank() && current.replyTo == null) {
+                        current.copy(draftText = draft?.text.orEmpty())
+                    } else {
+                        current
+                    }
+                }
+                if (draft != null && draft.parentId > 0) {
+                    chatRepository.message(key, ref, draft.parentId)?.let { parent ->
+                        _state.update { current ->
+                            if (current.replyTo == null) current.copy(replyTo = parent) else current
+                        }
+                    }
                 }
             }
-
-            val cursor = chatRepository.cursor(key, ref)
-            _state.update {
-                it.copy(
-                    recallEnabled = cursor?.recallEnabled ?: true,
-                    unreadAnchorId = cursor?.lastReadMessageId ?: 0,
-                )
+            launch {
+                val cursor = chatRepository.cursor(key, ref)
+                _state.update {
+                    it.copy(
+                        recallEnabled = cursor?.recallEnabled ?: it.recallEnabled,
+                        unreadAnchorId = cursor?.lastReadMessageId ?: 0,
+                    )
+                }
             }
-            observeMessages(key, ref)
             if (target is ChatTarget.Private) {
                 viewModelScope.launch { loadContact(key, target.chatId, target.otherUserId) }
             } else if (target is ChatTarget.Channel) {
                 viewModelScope.launch { loadChannelExtras(key, target.id) }
             }
 
-            val cached = chatRepository.countMessages(key, ref)
-            val online = if (cached == 0L) {
-                chatRepository.refreshHistory(key, ref)
-            } else {
-                syncCoordinator.status.value.online
-            }
-            val latestCursor = chatRepository.cursor(key, ref)
-            _state.update {
-                it.copy(
-                    loading = false,
-                    offline = !online,
-                    recallEnabled = latestCursor?.recallEnabled
-                        ?: it.recallEnabled,
-                )
-            }
             syncCoordinator.setActive(ref)
             syncCoordinator.requestSync()
-            sendQueue.setOnline(online)
-            if (online) sendQueue.drain()
-            updateHasMore(key, ref)
-            if (online && target is ChatTarget.Channel) {
-                chatRepository.markChannelRead(key, target.id)
+
+            viewModelScope.launch {
+                val cached = chatRepository.countMessages(key, ref)
+                if (cached == 0L) {
+                    _state.update { it.copy(initialSyncing = true) }
+                }
+                val online = if (cached == 0L) {
+                    chatRepository.refreshHistory(key, ref)
+                } else {
+                    syncCoordinator.status.value.online
+                }
+                val latestCursor = chatRepository.cursor(key, ref)
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        initialSyncing = false,
+                        offline = !online,
+                        recallEnabled = latestCursor?.recallEnabled ?: it.recallEnabled,
+                    )
+                }
+                sendQueue.setOnline(online)
+                if (online) sendQueue.drain()
+                updateHasMore(key, ref)
+                if (online && target is ChatTarget.Channel) {
+                    chatRepository.markChannelRead(key, target.id)
+                }
             }
         }
     }
@@ -276,11 +296,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 firstError = ErrorMessages.humanize("upload_failed")
                             }
                         } else {
-                            chatRepository.cacheUploadedAttachment(
-                                uri,
-                                upload.fileUrl,
-                                upload.fileName,
-                            )
                             val type = if (preferImage || upload.fileType == "image") {
                                 "image"
                             } else {
@@ -683,7 +698,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _state.update { current ->
                         current.copy(
                             messages = messages,
-                            loading = current.loading && messages.isEmpty(),
+                            loading = false,
                         )
                     }
                     updateHasMore(key, ref)

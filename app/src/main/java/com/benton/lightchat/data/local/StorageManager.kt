@@ -5,6 +5,7 @@ import android.os.StatFs
 import androidx.room.withTransaction
 import coil.ImageLoader
 import coil.annotation.ExperimentalCoilApi
+import com.benton.lightchat.data.local.cache.CacheDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -24,6 +25,7 @@ data class StorageSnapshot(
 class StorageManager(
     private val context: Context,
     private val database: ChatDatabase,
+    private val cacheDatabase: CacheDatabase,
     private val imageLoader: ImageLoader,
     private val attachmentCache: AttachmentCache,
 ) {
@@ -84,6 +86,7 @@ class StorageManager(
             dao.deleteAllDrafts()
             dao.deleteAllSyncState()
         }
+        cacheDatabase.cacheDao().deleteAll()
         imageLoader.memoryCache?.clear()
         imageLoader.diskCache?.clear()
         attachmentCache.clear()

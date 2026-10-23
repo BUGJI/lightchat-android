@@ -16,6 +16,7 @@ object CredentialCipher {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val IV_BYTES = 12
     private const val TAG_BITS = 128
+    private const val STORAGE_PREFIX = "enc:v1:"
 
     fun encrypt(plainText: String): String? = runCatching {
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -33,6 +34,16 @@ object CredentialCipher {
         cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(TAG_BITS, iv))
         String(cipher.doFinal(data), Charsets.UTF_8)
     }.getOrNull()
+
+    fun encryptForStorage(plainText: String): String? =
+        encrypt(plainText)?.let { STORAGE_PREFIX + it }
+
+    fun isEncryptedStorage(value: String): Boolean = value.startsWith(STORAGE_PREFIX)
+
+    fun decryptStored(value: String): String? = when {
+        value.startsWith(STORAGE_PREFIX) -> decrypt(value.removePrefix(STORAGE_PREFIX))
+        else -> decrypt(value) ?: value
+    }
 
     private fun getOrCreateKey(): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }

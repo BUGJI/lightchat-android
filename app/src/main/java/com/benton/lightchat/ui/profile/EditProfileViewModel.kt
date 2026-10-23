@@ -42,22 +42,54 @@ class EditProfileViewModel(application: Application) : AndroidViewModel(applicat
     private val _state = MutableStateFlow(EditProfileUiState())
     val state: StateFlow<EditProfileUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            userRepository.observeProfile().collect { user ->
+                if (user == null) return@collect
+                _state.update { current ->
+                    if (current.loading && !current.saving) {
+                        current.copy(
+                            loading = false,
+                            username = user.username,
+                            nickname = user.nickname.orEmpty(),
+                            email = user.email.orEmpty(),
+                            bio = user.bio.orEmpty(),
+                            signature = user.signature.orEmpty(),
+                            existingAvatarUrl = user.avatar,
+                        )
+                    } else {
+                        current
+                    }
+                }
+            }
+        }
+    }
+
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                it.copy(
+                    loading = it.username.isBlank() && it.existingAvatarUrl == null,
+                    error = null,
+                )
+            }
             when (val result = userRepository.profile()) {
                 is ApiResult.Success -> {
                     val user = result.data
-                    _state.update {
-                        it.copy(
-                            loading = false,
-                            username = user?.username.orEmpty(),
-                            nickname = user?.nickname.orEmpty(),
-                            email = user?.email.orEmpty(),
-                            bio = user?.bio.orEmpty(),
-                            signature = user?.signature.orEmpty(),
-                            existingAvatarUrl = user?.avatar,
-                        )
+                    _state.update { current ->
+                        if (current.saving) {
+                            current.copy(loading = false)
+                        } else {
+                            current.copy(
+                                loading = false,
+                                username = user?.username.orEmpty(),
+                                nickname = user?.nickname.orEmpty(),
+                                email = user?.email.orEmpty(),
+                                bio = user?.bio.orEmpty(),
+                                signature = user?.signature.orEmpty(),
+                                existingAvatarUrl = user?.avatar,
+                            )
+                        }
                     }
                 }
 
@@ -120,7 +152,10 @@ class EditProfileViewModel(application: Application) : AndroidViewModel(applicat
                 ),
             )
             when (result) {
-                is ApiResult.Success -> _state.update { it.copy(saving = false, saved = true) }
+                is ApiResult.Success -> {
+                    _state.update { it.copy(saving = false, saved = true) }
+                    viewModelScope.launch { userRepository.profile() }
+                }
                 is ApiResult.Failure -> _state.update { it.copy(saving = false, error = result.message) }
             }
         }

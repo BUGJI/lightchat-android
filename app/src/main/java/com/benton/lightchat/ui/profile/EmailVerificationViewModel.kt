@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 
 data class EmailVerificationUiState(
     val loading: Boolean = true,
+    val loaded: Boolean = false,
+    val refreshing: Boolean = false,
     val email: String = "",
     val verified: Boolean = false,
     val sending: Boolean = false,
@@ -31,20 +33,41 @@ class EmailVerificationViewModel(application: Application) : AndroidViewModel(ap
     private val _state = MutableStateFlow(EmailVerificationUiState())
     val state: StateFlow<EmailVerificationUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            userRepository.observeProfile().collect { user ->
+                if (user != null && !_state.value.loaded) {
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            loaded = true,
+                            email = user.email.orEmpty(),
+                            verified = user.emailVerified,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                it.copy(loading = !it.loaded, refreshing = it.loaded, error = null)
+            }
             when (val result = userRepository.profile()) {
                 is ApiResult.Success -> _state.update {
                     it.copy(
                         loading = false,
+                        loaded = true,
+                        refreshing = false,
                         email = result.data?.email.orEmpty(),
                         verified = result.data?.emailVerified == true,
                     )
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }

@@ -46,7 +46,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.SessionDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.util.TimeFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,7 +89,7 @@ fun SessionsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         when {
-            state.loading -> LoadingBox(Modifier.padding(padding))
+            state.loading -> ListSkeleton(Modifier.padding(padding))
 
             state.sessions.isEmpty() -> EmptyState(
                 icon = Icons.Filled.Devices,
@@ -97,28 +98,29 @@ fun SessionsScreen(
                 modifier = Modifier.padding(padding),
             )
 
-            else -> LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(state.sessions, key = { it.id }) { session ->
-                    SessionCard(
-                        session = session,
-                        busy = state.actionInProgress,
-                        onRevoke = { viewModel.revoke(session) },
-                    )
-                }
-                item(key = "revoke_others") {
-                    OutlinedButton(
-                        onClick = { confirmRevokeOthers = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !state.actionInProgress &&
-                            state.sessions.any { !it.current },
-                    ) {
-                        Text("退出其他所有设备")
+            else -> Column(Modifier.padding(padding)) {
+                InlineSyncBar(visible = state.refreshing)
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(state.sessions, key = { it.id }) { session ->
+                        SessionCard(
+                            session = session,
+                            busy = state.actionInProgress,
+                            onRevoke = { viewModel.revoke(session) },
+                        )
+                    }
+                    item(key = "revoke_others") {
+                        OutlinedButton(
+                            onClick = { confirmRevokeOthers = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !state.actionInProgress &&
+                                state.sessions.any { !it.current },
+                        ) {
+                            Text("退出其他所有设备")
+                        }
                     }
                 }
             }

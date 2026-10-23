@@ -23,7 +23,21 @@ data class AuthUiState(
     val error: String? = null,
     val rememberUsername: Boolean = false,
     val rememberPassword: Boolean = false,
+    val autoLogin: Boolean = false,
+    val autoLoginRunning: Boolean = false,
+    val autoLoginFinished: Boolean = false,
 )
+
+private val deterministicLoginFailures = setOf(
+    "invalid_credentials",
+    "invalid_username",
+    "missing_fields",
+    "account_disabled",
+    "account_locked",
+)
+
+internal fun isDeterministicLoginFailure(code: String): Boolean =
+    code in deterministicLoginFailures
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -33,30 +47,51 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
+    private var autoLoginAttempted = false
+
     init {
-        viewModelScope.launch {
-            val prefs = preferences.current()
-            val password = if (prefs.rememberPassword) {
-                CredentialCipher.decrypt(prefs.savedPassword)
-            } else {
-                null
-            }
-            _state.update {
-                it.copy(
-                    rememberUsername = prefs.rememberUsername,
-                    rememberPassword = prefs.rememberPassword,
-                    username = if (prefs.rememberUsername && it.username.isEmpty()) {
-                        prefs.savedUsername
-                    } else {
-                        it.username
-                    },
-                    password = if (password != null && it.password.isEmpty()) {
-                        password
-                    } else {
-                        it.password
-                    },
-                )
-            }
+        viewModelScope.launch { loadRememberedCredentials() }
+    }
+
+    fun refreshRememberedCredentials() {
+        viewModelScope.launch { loadRememberedCredentials() }
+    }
+
+    fun onSessionActive() {
+        autoLoginAttempted = false
+        if (_state.value.autoLoginFinished) {
+            _state.update { it.copy(autoLoginFinished = false) }
+        }
+    }
+
+    private suspend fun loadRememberedCredentials() {
+        val prefs = preferences.current()
+        val password = if (prefs.rememberPassword && prefs.savedPassword.isNotBlank()) {
+            CredentialCipher.decryptStored(prefs.savedPassword)
+        } else {
+            null
+        }
+        val passwordUnavailable = prefs.rememberPassword && password == null
+        if (passwordUnavailable) {
+            preferences.clearRememberedPassword()
+        }
+        _state.update { current ->
+            current.copy(
+                rememberUsername = prefs.rememberUsername,
+                rememberPassword = if (passwordUnavailable) false else prefs.rememberPassword,
+                autoLogin = if (passwordUnavailable) false else prefs.autoLogin,
+                username = if (current.username.isEmpty() && prefs.rememberUsername) {
+                    prefs.savedUsername
+                } else {
+                    current.username
+                },
+                password = if (current.password.isEmpty() && password != null) {
+                    password
+                } else {
+                    current.password
+                },
+                error = if (passwordUnavailable) "已保存的密码无法读取，请重新登录" else current.error,
+            )
         }
     }
 
@@ -72,17 +107,48 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun setEmail(value: String) = _state.update { it.copy(email = value, error = null) }
 
     fun setRememberUsername(value: Boolean) {
-        if (_state.value.rememberUsername == value) return
         _state.update {
-            it.copy(rememberUsername = value, rememberPassword = value && it.rememberPassword)
+            val keepPassword = value && it.rememberPassword
+            it.copy(
+                rememberUsername = value,
+                rememberPassword = keepPassword,
+                autoLogin = keepPassword && it.autoLogin,
+            )
         }
-        if (!value) viewModelScope.launch { preferences.clearRememberedUsername() }
+        persistRememberOptions()
     }
 
     fun setRememberPassword(value: Boolean) {
-        if (_state.value.rememberPassword == value) return
-        _state.update { it.copy(rememberPassword = value) }
-        if (!value) viewModelScope.launch { preferences.clearRememberedPassword() }
+        _state.update {
+            it.copy(
+                rememberUsername = it.rememberUsername || value,
+                rememberPassword = value,
+                autoLogin = value && it.autoLogin,
+            )
+        }
+        persistRememberOptions()
+    }
+
+    fun setAutoLogin(value: Boolean) {
+        _state.update {
+            if (value) {
+                it.copy(rememberUsername = true, rememberPassword = true, autoLogin = true)
+            } else {
+                it.copy(autoLogin = false)
+            }
+        }
+        persistRememberOptions()
+    }
+
+    private fun persistRememberOptions() {
+        viewModelScope.launch {
+            val state = _state.value
+            preferences.saveRememberOptions(
+                rememberUsername = state.rememberUsername,
+                rememberPassword = state.rememberPassword,
+                autoLogin = state.autoLogin,
+            )
+        }
     }
 
     fun submit() {
@@ -117,9 +183,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
             when (result) {
                 is ApiResult.Success -> {
-                    if (state.mode == AuthMode.Login) {
-                        rememberLogin(username, state.password)
-                    }
+                    rememberLogin(username, state.password)
                     _state.update {
                         it.copy(loading = false, password = "", email = "", error = null)
                     }
@@ -132,15 +196,110 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun tryAutoLogin() {
+        if (autoLoginAttempted || _state.value.loading || _state.value.autoLoginRunning) return
+        autoLoginAttempted = true
+        _state.update {
+            it.copy(autoLoginRunning = true, autoLoginFinished = false, error = null)
+        }
+        viewModelScope.launch {
+            val prefs = preferences.current()
+            if (!prefs.token.isNullOrBlank() || !prefs.autoLogin) {
+                _state.update {
+                    it.copy(autoLoginRunning = false, autoLoginFinished = true)
+                }
+                return@launch
+            }
+
+            val username = prefs.savedUsername.ifBlank { _state.value.username }
+            val password = if (prefs.rememberPassword && prefs.savedPassword.isNotBlank()) {
+                CredentialCipher.decryptStored(prefs.savedPassword)
+            } else {
+                null
+            }
+            if (username.isBlank() || !prefs.rememberPassword || password.isNullOrBlank()) {
+                preferences.clearRememberedPassword()
+                _state.update {
+                    it.copy(
+                        rememberUsername = prefs.rememberUsername && username.isNotBlank(),
+                        rememberPassword = false,
+                        autoLogin = false,
+                        autoLoginRunning = false,
+                        autoLoginFinished = true,
+                        username = username,
+                        error = "已保存的登录信息不可用，请重新登录",
+                    )
+                }
+                return@launch
+            }
+
+            _state.update {
+                it.copy(
+                    username = username,
+                    password = password,
+                    rememberUsername = prefs.rememberUsername,
+                    rememberPassword = true,
+                    autoLogin = true,
+                    loading = true,
+                    autoLoginRunning = true,
+                    error = null,
+                )
+            }
+
+            when (val result = authRepository.login(username, password)) {
+                is ApiResult.Success -> {
+                    rememberLogin(username, password)
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            autoLoginRunning = false,
+                            autoLoginFinished = true,
+                            password = "",
+                            error = null,
+                        )
+                    }
+                }
+
+                is ApiResult.Failure -> {
+                    val deterministic = isDeterministicLoginFailure(result.code)
+                    if (deterministic) {
+                        preferences.clearRememberedPassword()
+                    }
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            autoLoginRunning = false,
+                            autoLoginFinished = true,
+                            rememberPassword = if (deterministic) false else it.rememberPassword,
+                            autoLogin = if (deterministic) false else it.autoLogin,
+                            password = if (deterministic) "" else it.password,
+                            error = if (deterministic) {
+                                result.message
+                            } else {
+                                "自动登录失败：${result.message}"
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun rememberLogin(username: String, password: String) {
-        val rememberUsername = _state.value.rememberUsername
-        val rememberPassword = rememberUsername && _state.value.rememberPassword
-        val encryptedPassword = if (rememberPassword) CredentialCipher.encrypt(password) else null
+        val state = _state.value
+        val rememberUsername = state.rememberUsername
+        val rememberPassword = rememberUsername && state.rememberPassword
+        val encryptedPassword = if (rememberPassword) {
+            CredentialCipher.encryptForStorage(password)
+        } else {
+            null
+        }
         preferences.saveRememberedLogin(
             username = username,
             encryptedPassword = encryptedPassword,
             rememberUsername = rememberUsername,
             rememberPassword = rememberPassword,
+            autoLogin = state.autoLogin && rememberPassword,
         )
     }
 }

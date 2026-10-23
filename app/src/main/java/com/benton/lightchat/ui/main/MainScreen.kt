@@ -1,5 +1,6 @@
 package com.benton.lightchat.ui.main
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -67,7 +68,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ChannelDto
 import com.benton.lightchat.data.remote.PrivateChatDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.LoadingBox
+import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.OfflineBanner
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.ui.contacts.FriendsEvent
@@ -100,6 +102,10 @@ fun MainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    BackHandler(enabled = selectedTab != 0) {
+        selectedTab = 0
+    }
 
     LaunchedEffect(Unit) {
         viewModel.start()
@@ -236,6 +242,7 @@ fun MainScreen(
             if (state.offline) {
                 OfflineBanner()
             }
+            InlineSyncBar(visible = state.refreshing)
             Box(Modifier.weight(1f)) {
                 when (selectedTab) {
                     0 -> PullToRefreshBox(
@@ -288,7 +295,7 @@ private fun MessagesTab(
     onOpenAdd: () -> Unit,
 ) {
     if (state.loading) {
-        LoadingBox()
+        ListSkeleton()
         return
     }
 
@@ -401,7 +408,7 @@ private fun ContactsTab(
 
         if (section == 0) {
             when {
-                friendsState.loading && friendsState.friends.isEmpty() -> LoadingBox()
+                friendsState.loading && friendsState.friends.isEmpty() -> ListSkeleton()
 
                 friendsState.friends.isEmpty() && friendsState.requests.isEmpty() -> EmptyState(
                     icon = Icons.Filled.People,
@@ -499,7 +506,7 @@ private fun ContactsTab(
             }
         } else {
             if (state.loading) {
-                LoadingBox()
+                ListSkeleton()
             } else if (joinedChannels.isEmpty()) {
                 EmptyState(
                     icon = Icons.Filled.Groups,

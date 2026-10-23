@@ -1,5 +1,9 @@
 package com.benton.lightchat.data.repository
 
+import com.benton.lightchat.data.local.AccountKey
+import com.benton.lightchat.data.local.AppPreferences
+import com.benton.lightchat.data.local.cache.CacheKeys
+import com.benton.lightchat.data.local.cache.SnapshotStore
 import com.benton.lightchat.data.remote.ApiClient
 import com.benton.lightchat.data.remote.ApiEnvelope
 import com.benton.lightchat.data.remote.ApiExecutor
@@ -7,6 +11,11 @@ import com.benton.lightchat.data.remote.ApiResult
 import com.benton.lightchat.data.remote.HealthData
 import com.benton.lightchat.data.remote.ServerStatusData
 import com.benton.lightchat.util.UrlUtils
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import retrofit2.Response
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -21,10 +30,21 @@ data class ServerTestResult(
     val phpVersion: String? = null,
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ServerRepository(
     private val apiClient: ApiClient,
     private val executor: ApiExecutor,
+    private val preferences: AppPreferences,
+    private val snapshotStore: SnapshotStore,
 ) {
+
+    private val ownerKeyFlow = preferences.stateFlow
+        .map { AccountKey.of(it.baseUrl, it.userId) }
+        .distinctUntilChanged()
+
+    fun observeServerStatus(): Flow<ServerStatusData?> = ownerKeyFlow.flatMapLatest { ownerKey ->
+        snapshotStore.observe(ownerKey, CacheKeys.SERVER_STATUS, ServerStatusData.serializer())
+    }
 
     suspend fun testConnection(input: String): ServerTestResult {
         val normalized = UrlUtils.normalize(input)
@@ -75,8 +95,25 @@ class ServerRepository(
         }
     }
 
-    suspend fun serverStatus(): ApiResult<ServerStatusData> =
-        executor.execute { service -> service.serverStatus() }
+    suspend fun serverStatus(): ApiResult<ServerStatusData> {
+        val result = executor.execute { service -> service.serverStatus() }
+        if (result is ApiResult.Success) {
+            result.data?.let {
+                snapshotStore.write(
+                    ownerKey(),
+                    CacheKeys.SERVER_STATUS,
+                    ServerStatusData.serializer(),
+                    it,
+                )
+            }
+        }
+        return result
+    }
+
+    private suspend fun ownerKey(): String? {
+        val prefs = preferences.current()
+        return AccountKey.of(prefs.baseUrl, prefs.userId)
+    }
 
     private fun readEnvelope(response: Response<ApiEnvelope<HealthData>>): ApiEnvelope<HealthData>? {
         response.body()?.let { return it }

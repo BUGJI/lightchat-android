@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.local.StorageSnapshot
+import com.benton.lightchat.ui.components.FormSkeleton
 import com.benton.lightchat.util.SizeFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,14 +103,7 @@ fun StorageScreen(
         ) {
             val snapshot = state.snapshot
             if (state.loading && snapshot == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
+                FormSkeleton(blocks = 2)
             } else if (snapshot != null) {
                 TotalCard(snapshot)
                 CategoriesCard(

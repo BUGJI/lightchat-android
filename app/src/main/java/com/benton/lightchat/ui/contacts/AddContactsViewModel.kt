@@ -8,6 +8,8 @@ import com.benton.lightchat.data.remote.ApiResult
 import com.benton.lightchat.data.remote.ChannelDto
 import com.benton.lightchat.data.remote.UserDto
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +27,7 @@ data class AddContactsUiState(
     val searchResults: List<UserDto> = emptyList(),
     val searching: Boolean = false,
     val loading: Boolean = true,
+    val refreshing: Boolean = false,
     val actionInProgress: Boolean = false,
     val requestedUserIds: Set<Long> = emptySet(),
     val friendUserIds: Set<Long> = emptySet(),
@@ -60,25 +63,56 @@ class AddContactsViewModel(application: Application) : AndroidViewModel(applicat
     fun start() {
         if (started) return
         started = true
+        viewModelScope.launch {
+            userRepository.observeUsers().collect { users ->
+                if (users != null) {
+                    val currentUserId = container.preferences.current().userId
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            users = users.filter { user -> user.id != currentUserId },
+                        )
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            chatRepository.observeDiscoverableChannels().collect { channels ->
+                if (channels != null) {
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            channels = channels.filter { channel -> !channel.isJoined },
+                        )
+                    }
+                }
+            }
+        }
         load()
     }
 
     fun load() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                val hasData = it.users.isNotEmpty() || it.channels.isNotEmpty()
+                it.copy(loading = !hasData, refreshing = hasData, error = null)
+            }
             val currentUserId = container.preferences.current().userId
 
-            val usersResult = userRepository.users()
-            val channelsResult = chatRepository.channels()
+            val (usersResult, channelsResult) = coroutineScope {
+                val usersDeferred = async { userRepository.users() }
+                val channelsDeferred = async { chatRepository.channels() }
+                usersDeferred.await() to channelsDeferred.await()
+            }
 
             _state.update { state ->
                 val users = when (usersResult) {
                     is ApiResult.Success -> usersResult.data.orEmpty()
-                    is ApiResult.Failure -> emptyList()
+                    is ApiResult.Failure -> state.users
                 }.filter { it.id != currentUserId }
                 val channels = when (channelsResult) {
                     is ApiResult.Success -> channelsResult.data.orEmpty()
-                    is ApiResult.Failure -> emptyList()
+                    is ApiResult.Failure -> state.channels
                 }.filter { !it.isJoined }
                 val error = when (usersResult) {
                     is ApiResult.Failure -> usersResult.message
@@ -89,6 +123,7 @@ class AddContactsViewModel(application: Application) : AndroidViewModel(applicat
                 }
                 state.copy(
                     loading = false,
+                    refreshing = false,
                     users = users,
                     channels = channels,
                     error = error,
@@ -157,6 +192,7 @@ class AddContactsViewModel(application: Application) : AndroidViewModel(applicat
                         )
                     }
                     _events.emit(AddContactsEvent.ShowMessage("已加入 ${channel.displayName}"))
+                    load()
                 }
 
                 is ApiResult.Failure -> {

@@ -1,7 +1,10 @@
 package com.benton.lightchat.ui.navigation
 
 import android.net.Uri
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -15,10 +18,13 @@ import com.benton.lightchat.ui.chats.ChatTarget
 import com.benton.lightchat.ui.contacts.AddContactsScreen
 import com.benton.lightchat.ui.contacts.FriendsScreen
 import com.benton.lightchat.ui.main.MainScreen
+import com.benton.lightchat.ui.profile.AboutSettingsScreen
+import com.benton.lightchat.ui.profile.AppearanceSettingsScreen
 import com.benton.lightchat.ui.profile.ChangePasswordScreen
 import com.benton.lightchat.ui.profile.EditProfileScreen
 import com.benton.lightchat.ui.profile.EmailVerificationScreen
 import com.benton.lightchat.ui.profile.NotificationSettingsScreen
+import com.benton.lightchat.ui.profile.ServerStatusScreen
 import com.benton.lightchat.ui.profile.SessionsScreen
 import com.benton.lightchat.ui.profile.SettingsScreen
 import com.benton.lightchat.ui.profile.StorageScreen
@@ -35,8 +41,24 @@ fun MainNavHost(
 ) {
     val navController = rememberNavController()
     val baseUrl = prefs.baseUrl
+    val layoutDirection = LocalLayoutDirection.current
 
-    NavHost(navController = navController, startDestination = "main") {
+    NavHost(
+        navController = navController,
+        startDestination = "main",
+        modifier = Modifier.fillMaxSize(),
+        enterTransition = { NavMotion.enter(layoutDirection) },
+        exitTransition = { NavMotion.exit(layoutDirection) },
+        popEnterTransition = { NavMotion.popEnter(layoutDirection) },
+        popExitTransition = { NavMotion.popExit(layoutDirection) },
+        predictivePopEnterTransition = { swipeEdge ->
+            NavMotion.predictivePopEnter(swipeEdge)
+        },
+        predictivePopExitTransition = { swipeEdge ->
+            NavMotion.predictivePopExit(swipeEdge)
+        },
+        sizeTransform = null,
+    ) {
         composable("main") {
             MainScreen(
                 baseUrl = baseUrl,
@@ -179,13 +201,35 @@ fun MainNavHost(
             SettingsScreen(
                 serverUrl = baseUrl,
                 onBack = { navController.popBackStack() },
-                onChangeServer = { navController.navigate("server") },
-                onOpenStorage = { navController.navigate("settings/storage") },
+                onOpenAppearance = { navController.navigate("settings/appearance") },
                 onOpenNotifications = { navController.navigate("settings/notifications") },
+                onOpenStorage = { navController.navigate("settings/storage") },
+                onOpenServer = { navController.navigate("server") },
+                onOpenServerStatus = { navController.navigate("settings/server-status") },
                 onOpenPassword = { navController.navigate("settings/password") },
                 onOpenSessions = { navController.navigate("settings/sessions") },
                 onOpenTwoFactor = { navController.navigate("settings/two-factor") },
                 onOpenEmailVerification = { navController.navigate("settings/email") },
+                onOpenAbout = { navController.navigate("settings/about") },
+                updateViewModel = updateViewModel,
+            )
+        }
+
+        composable("settings/appearance") {
+            AppearanceSettingsScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("settings/server-status") {
+            ServerStatusScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("settings/about") {
+            AboutSettingsScreen(
+                onBack = { navController.popBackStack() },
                 updateViewModel = updateViewModel,
             )
         }

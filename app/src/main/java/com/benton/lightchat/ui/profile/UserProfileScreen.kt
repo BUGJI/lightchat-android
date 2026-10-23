@@ -2,11 +2,11 @@ package com.benton.lightchat.ui.profile
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,7 +17,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -26,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -34,12 +34,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.benton.lightchat.ui.components.LoadingBox
-import com.benton.lightchat.ui.components.UserAvatar
+import com.benton.lightchat.ui.components.FormSkeleton
+import com.benton.lightchat.ui.components.InlineSyncBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,10 +77,43 @@ fun UserProfileScreen(
                 },
             )
         },
+        bottomBar = {
+            if (!state.loading && user != null) {
+                Surface(tonalElevation = 3.dp) {
+                    Button(
+                        onClick = {
+                            viewModel.startPrivateChat(user.id, displayName, onOpenPrivate)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        enabled = !state.actionInProgress,
+                    ) {
+                        if (state.actionInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(if (state.actionInProgress) "正在打开会话…" else "发消息")
+                    }
+                }
+            }
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        if (state.loading) {
-            LoadingBox(Modifier.padding(padding))
+        if (state.loading && user == null) {
+            FormSkeleton(Modifier.padding(padding), blocks = 2)
             return@Scaffold
         }
 
@@ -112,57 +144,8 @@ fun UserProfileScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    UserAvatar(
-                        name = displayName,
-                        avatarUrl = user.avatar,
-                        baseUrl = baseUrl,
-                        size = 88.dp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "@${user.username}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    val roleLabel = when (user.role) {
-                        "admin" -> "管理员"
-                        "vip" -> "会员"
-                        "guest" -> "游客"
-                        else -> "成员"
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = roleLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    user.signature?.takeIf { it.isNotBlank() }?.let {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+            InlineSyncBar(visible = state.refreshing)
+            ProfileHeader(user = user, baseUrl = baseUrl)
 
             if (!user.bio.isNullOrBlank()) {
                 Card(Modifier.fillMaxWidth()) {
@@ -176,45 +159,10 @@ fun UserProfileScreen(
 
             user.joinDate?.takeIf { it.isNotBlank() }?.let {
                 Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = "加入时间",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(text = it, style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.padding(16.dp)) {
+                        ProfileInfoRow("加入时间", it)
                     }
                 }
-            }
-
-            Button(
-                onClick = {
-                    viewModel.startPrivateChat(user.id, displayName, onOpenPrivate)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !state.actionInProgress,
-            ) {
-                if (state.actionInProgress) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                } else {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(if (state.actionInProgress) "正在打开会话…" else "发消息")
             }
         }
     }

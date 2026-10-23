@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 
 data class UserProfileUiState(
     val loading: Boolean = true,
+    val refreshing: Boolean = false,
     val user: UserDto? = null,
     val actionInProgress: Boolean = false,
     val error: String? = null,
@@ -28,16 +29,31 @@ class UserProfileViewModel(application: Application) : AndroidViewModel(applicat
     private val _state = MutableStateFlow(UserProfileUiState())
     val state: StateFlow<UserProfileUiState> = _state.asStateFlow()
 
+    private var observingUserId = 0L
+
     fun load(userId: Long) {
+        if (userId <= 0) return
+        if (observingUserId != userId) {
+            observingUserId = userId
+            viewModelScope.launch {
+                userRepository.observeProfile(userId).collect { user ->
+                    if (user != null) {
+                        _state.update { it.copy(user = user, loading = false) }
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
-            _state.update { it.copy(loading = it.user == null, error = null) }
+            _state.update {
+                it.copy(loading = it.user == null, refreshing = it.user != null, error = null)
+            }
             when (val result = userRepository.profile(userId)) {
                 is ApiResult.Success -> _state.update {
-                    it.copy(loading = false, user = result.data)
+                    it.copy(loading = false, refreshing = false, user = result.data)
                 }
 
                 is ApiResult.Failure -> _state.update {
-                    it.copy(loading = false, error = result.message)
+                    it.copy(loading = false, refreshing = false, error = result.message)
                 }
             }
         }
