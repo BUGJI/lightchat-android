@@ -15,10 +15,12 @@ import com.benton.lightchat.data.remote.RemoveFriendData
 import com.benton.lightchat.data.remote.RemoveFriendRequest
 import com.benton.lightchat.data.remote.RespondFriendData
 import com.benton.lightchat.data.remote.RespondFriendRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -34,7 +36,7 @@ class FriendRepository(
 
     fun observeFriends(): Flow<FriendsData?> = ownerKeyFlow.flatMapLatest { ownerKey ->
         snapshotStore.observe(ownerKey, CacheKeys.FRIENDS, FriendsData.serializer())
-    }
+    }.flowOn(Dispatchers.Default)
 
     suspend fun list(): ApiResult<FriendsData> {
         val result = executor.execute { service -> service.friends() }

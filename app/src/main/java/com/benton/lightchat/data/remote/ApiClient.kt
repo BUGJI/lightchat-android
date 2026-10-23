@@ -56,6 +56,9 @@ class ApiClient(private val tokenStore: TokenStore) {
     private var retrofit: Retrofit? = null
 
     @Volatile
+    private var cachedService: ApiService? = null
+
+    @Volatile
     var baseUrl: String? = null
         private set
 
@@ -63,12 +66,14 @@ class ApiClient(private val tokenStore: TokenStore) {
         synchronized(this) {
             if (url == baseUrl) return
             baseUrl = url
-            retrofit = url?.let { buildRetrofit(it) }
+            val built = url?.let { buildRetrofit(it) }
+            retrofit = built
+            cachedService = built?.create(ApiService::class.java)
         }
     }
 
     val service: ApiService?
-        get() = retrofit?.create(ApiService::class.java)
+        get() = cachedService
 
     fun serviceFor(baseUrl: String): ApiService = buildRetrofit(baseUrl).create(ApiService::class.java)
 

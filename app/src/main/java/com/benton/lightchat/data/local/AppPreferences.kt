@@ -12,9 +12,11 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.benton.lightchat.util.CredentialCipher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
@@ -68,6 +70,10 @@ class AppPreferences(private val context: Context) {
         val LAST_UPDATE_CHECK_AT = longPreferencesKey("last_update_check_at")
     }
 
+    private val tokenLock = Any()
+    private var cachedEncryptedToken: String? = null
+    private var cachedToken: String? = null
+
     val stateFlow: Flow<PrefsState> = context.lightchatDataStore.data
         .catch { error ->
             if (error is IOException) emit(emptyPreferences()) else throw error
@@ -77,7 +83,7 @@ class AppPreferences(private val context: Context) {
             val legacyAmoled = storedThemeMode == "amoled"
             PrefsState(
                 baseUrl = prefs[Keys.BASE_URL],
-                token = prefs[Keys.TOKEN]?.let { CredentialCipher.decryptStored(it) },
+                token = decryptToken(prefs[Keys.TOKEN]),
                 tokenExpiresAt = prefs[Keys.TOKEN_EXPIRES_AT],
                 absoluteExpiresAt = prefs[Keys.ABSOLUTE_EXPIRES_AT],
                 userId = prefs[Keys.USER_ID] ?: 0,
@@ -98,6 +104,24 @@ class AppPreferences(private val context: Context) {
                 lastUpdateCheckAt = prefs[Keys.LAST_UPDATE_CHECK_AT] ?: 0,
             )
         }
+        .flowOn(Dispatchers.IO)
+
+    private fun decryptToken(raw: String?): String? {
+        synchronized(tokenLock) {
+            if (raw == null) {
+                cachedEncryptedToken = null
+                cachedToken = null
+                return null
+            }
+            if (raw == cachedEncryptedToken) return cachedToken
+            val value = CredentialCipher.decryptStored(raw)
+            if (value != null) {
+                cachedEncryptedToken = raw
+                cachedToken = value
+            }
+            return value
+        }
+    }
 
     suspend fun current(): PrefsState = stateFlow.first()
 

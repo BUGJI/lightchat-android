@@ -21,6 +21,10 @@ class AttachmentCache(
     private val indexLock = Any()
     @Volatile
     private var indexed = false
+    private val hashCache = object : LinkedHashMap<String, String>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+            size > MAX_HASH_CACHE
+    }
 
     fun cachedFile(url: String, fileNameHint: String? = null): File? {
         if (url.isBlank()) return null
@@ -211,17 +215,33 @@ class AttachmentCache(
         if (raw.isNullOrBlank()) return null
         val path = runCatching { Uri.parse(raw).lastPathSegment }.getOrNull() ?: raw
         val extension = path.substringAfterLast('.', "")
-        return extension.takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }
+        return extension.takeIf { it.length in 1..8 && it.all(::isAsciiLetterOrDigit) }
     }
 
-    private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray())
-        .joinToString("") { "%02x".format(it) }
+    private fun isAsciiLetterOrDigit(char: Char): Boolean =
+        char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9'
+
+    private fun hash(value: String): String = synchronized(hashCache) {
+        hashCache.getOrPut(value) { sha256(value) }
+    }
+
+    private fun sha256(value: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+        val chars = CharArray(bytes.size * 2)
+        for (index in bytes.indices) {
+            val byte = bytes[index].toInt() and 0xFF
+            chars[index * 2] = HEX_DIGITS[byte ushr 4]
+            chars[index * 2 + 1] = HEX_DIGITS[byte and 0x0F]
+        }
+        return String(chars)
+    }
 
     companion object {
         private const val MAX_BYTES = 200L * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 512L * 1024 * 1024
         private const val TARGET_TOTAL_BYTES = 384L * 1024 * 1024
+        private const val MAX_HASH_CACHE = 512
+        private val HEX_DIGITS = "0123456789abcdef".toCharArray()
     }
 }
 

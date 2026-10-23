@@ -9,10 +9,19 @@ object TimeFormat {
 
     private const val SERVER_PATTERN = "yyyy-MM-dd HH:mm:ss"
 
+    private val formats: ThreadLocal<HashMap<String, SimpleDateFormat>> =
+        ThreadLocal.withInitial { HashMap() }
+
+    private fun formatter(pattern: String, locale: Locale = Locale.getDefault()): SimpleDateFormat {
+        val key = "${locale.toLanguageTag()}|$pattern"
+        val cache = formats.get() ?: HashMap<String, SimpleDateFormat>().also { formats.set(it) }
+        return cache.getOrPut(key) { SimpleDateFormat(pattern, locale) }
+    }
+
     fun parse(raw: String?): Date? {
         if (raw.isNullOrBlank()) return null
         return runCatching {
-            SimpleDateFormat(SERVER_PATTERN, Locale.US).parse(raw)
+            formatter(SERVER_PATTERN, Locale.US).parse(raw)
         }.getOrNull()
     }
 
@@ -27,11 +36,11 @@ object TimeFormat {
             today.get(Calendar.YEAR) == target.get(Calendar.YEAR) -> "MM-dd HH:mm"
             else -> "yyyy-MM-dd"
         }
-        return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
+        return formatter(pattern).format(date)
     }
 
     fun nowServerString(): String =
-        SimpleDateFormat(SERVER_PATTERN, Locale.US).format(Date())
+        formatter(SERVER_PATTERN, Locale.US).format(Date())
 
     fun dayLabel(raw: String?, now: Date = Date()): String {
         val date = parse(raw) ?: return raw?.take(10).orEmpty()
@@ -47,8 +56,7 @@ object TimeFormat {
             sameYear && yesterday.get(Calendar.YEAR) == target.get(Calendar.YEAR) &&
                 yesterday.get(Calendar.DAY_OF_YEAR) == target.get(Calendar.DAY_OF_YEAR) -> "昨天"
 
-            else -> SimpleDateFormat(if (sameYear) "MM-dd" else "yyyy-MM-dd", Locale.getDefault())
-                .format(date)
+            else -> formatter(if (sameYear) "MM-dd" else "yyyy-MM-dd").format(date)
         }
     }
 
@@ -59,7 +67,7 @@ object TimeFormat {
             diffMinutes < 1 -> "刚刚活跃"
             diffMinutes < 60 -> "${diffMinutes} 分钟前活跃"
             diffMinutes < 60 * 24 -> "${diffMinutes / 60} 小时前活跃"
-            else -> SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(date) + " 活跃"
+            else -> formatter("yyyy-MM-dd").format(date) + " 活跃"
         }
     }
 }

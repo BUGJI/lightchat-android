@@ -48,6 +48,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.AttachFile
@@ -55,7 +56,6 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -146,6 +146,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
+
+private val mentionRegex = Regex("@[\\w\\u4e00-\\u9fa5]{1,32}")
+private val urlRegex = Regex("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+")
+private val voiceNameRegex = Regex("voice_(\\d+)s")
 
 private data class ImagePreviewTarget(
     val url: String,
@@ -750,12 +754,14 @@ private fun SearchMessagesOverlay(
                     }
                 }
 
-                val visible = results.filter { message ->
-                    when (filter) {
-                        SearchFilter.ALL -> true
-                        SearchFilter.TEXT -> message.type == "text"
-                        SearchFilter.IMAGE -> message.type == "image"
-                        SearchFilter.FILE -> message.type == "file"
+                val visible = remember(results, filter) {
+                    results.filter { message ->
+                        when (filter) {
+                            SearchFilter.ALL -> true
+                            SearchFilter.TEXT -> message.type == "text"
+                            SearchFilter.IMAGE -> message.type == "image"
+                            SearchFilter.FILE -> message.type == "file"
+                        }
                     }
                 }
 
@@ -1331,7 +1337,7 @@ private fun MessageBubble(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Icon(
-                                            Icons.Filled.InsertDriveFile,
+                                            Icons.AutoMirrored.Filled.InsertDriveFile,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.primary,
                                         )
@@ -1771,7 +1777,7 @@ private fun MessageInput(
                     )
                     DropdownMenuItem(
                         text = { Text("文件") },
-                        leadingIcon = { Icon(Icons.Filled.InsertDriveFile, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null) },
                         onClick = {
                             attachMenu = false
                             filePicker.launch(
@@ -1950,7 +1956,7 @@ private fun voiceDurationLabel(message: MessageDto): String {
     val fromContent = message.content.removePrefix("voice:").toIntOrNull()
     if (fromContent != null) return "${fromContent}s"
     val name = message.fileUrl?.let { Uri.parse(it).lastPathSegment } ?: return "语音"
-    val seconds = Regex("voice_(\\d+)s").find(name)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    val seconds = voiceNameRegex.find(name)?.groupValues?.getOrNull(1)?.toIntOrNull()
         ?: return "语音"
     return "${seconds}s"
 }
@@ -1985,54 +1991,59 @@ private fun ParentQuote(parent: ParentMessageDto, onOpen: () -> Unit) {
 
 @Composable
 private fun highlightKeyword(text: String, keyword: String): androidx.compose.ui.text.AnnotatedString {
-    if (keyword.isBlank()) return androidx.compose.ui.text.AnnotatedString(text)
     val color = MaterialTheme.colorScheme.primary
-    val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
-    var index = text.indexOf(keyword, ignoreCase = true)
-    while (index >= 0) {
-        builder.addStyle(
-            androidx.compose.ui.text.SpanStyle(
-                color = color,
-                fontWeight = FontWeight.SemiBold,
-                background = color.copy(alpha = 0.16f),
-            ),
-            index,
-            index + keyword.length,
-        )
-        index = text.indexOf(keyword, index + keyword.length, ignoreCase = true)
+    return remember(text, keyword, color) {
+        if (keyword.isBlank()) {
+            androidx.compose.ui.text.AnnotatedString(text)
+        } else {
+            val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
+            var index = text.indexOf(keyword, ignoreCase = true)
+            while (index >= 0) {
+                builder.addStyle(
+                    androidx.compose.ui.text.SpanStyle(
+                        color = color,
+                        fontWeight = FontWeight.SemiBold,
+                        background = color.copy(alpha = 0.16f),
+                    ),
+                    index,
+                    index + keyword.length,
+                )
+                index = text.indexOf(keyword, index + keyword.length, ignoreCase = true)
+            }
+            builder.toAnnotatedString()
+        }
     }
-    return builder.toAnnotatedString()
 }
 
 @Composable
 private fun highlightedContent(text: String): androidx.compose.ui.text.AnnotatedString {
     val color = MaterialTheme.colorScheme.primary
-    val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
-    val regex = Regex("@[\\w\\u4e00-\\u9fa5]{1,32}")
-    regex.findAll(text).forEach { match ->
-        builder.addStyle(
-            androidx.compose.ui.text.SpanStyle(
+    return remember(text, color) {
+        val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
+        mentionRegex.findAll(text).forEach { match ->
+            builder.addStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = color,
+                    fontWeight = FontWeight.Medium,
+                ),
+                match.range.first,
+                match.range.last + 1,
+            )
+        }
+        urlRegex.findAll(text).forEach { match ->
+            val style = androidx.compose.ui.text.SpanStyle(
                 color = color,
-                fontWeight = FontWeight.Medium,
-            ),
-            match.range.first,
-            match.range.last + 1,
-        )
+                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+            )
+            builder.addStyle(style, match.range.first, match.range.last + 1)
+            builder.addLink(
+                androidx.compose.ui.text.LinkAnnotation.Url(url = match.value),
+                match.range.first,
+                match.range.last + 1,
+            )
+        }
+        builder.toAnnotatedString()
     }
-    val urlRegex = Regex("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+")
-    urlRegex.findAll(text).forEach { match ->
-        val style = androidx.compose.ui.text.SpanStyle(
-            color = color,
-            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-        )
-        builder.addStyle(style, match.range.first, match.range.last + 1)
-        builder.addLink(
-            androidx.compose.ui.text.LinkAnnotation.Url(url = match.value),
-            match.range.first,
-            match.range.last + 1,
-        )
-    }
-    return builder.toAnnotatedString()
 }
 
 private fun messagePreview(parent: ParentMessageDto): String = when (parent.type) {

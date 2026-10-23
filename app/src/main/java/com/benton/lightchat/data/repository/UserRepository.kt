@@ -18,10 +18,12 @@ import com.benton.lightchat.data.remote.TwoFactorData
 import com.benton.lightchat.data.remote.UpdateProfileRequest
 import com.benton.lightchat.data.remote.UserDto
 import com.benton.lightchat.data.remote.UsersData
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -39,22 +41,22 @@ class UserRepository(
         val key = userId?.let { CacheKeys.profile(it) } ?: CacheKeys.PROFILE_SELF
         return ownerKeyFlow.flatMapLatest { ownerKey ->
             snapshotStore.observe(ownerKey, key, UserDto.serializer())
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     fun observeSessions(): Flow<List<SessionDto>?> = ownerKeyFlow.flatMapLatest { ownerKey ->
         snapshotStore.observe(ownerKey, CacheKeys.SESSIONS, SessionsData.serializer())
             .map { it?.sessions }
-    }
+    }.flowOn(Dispatchers.Default)
 
     fun observeTwoFactor(): Flow<TwoFactorData?> = ownerKeyFlow.flatMapLatest { ownerKey ->
         snapshotStore.observe(ownerKey, CacheKeys.TWO_FACTOR, TwoFactorData.serializer())
-    }
+    }.flowOn(Dispatchers.Default)
 
     fun observeUsers(): Flow<List<UserDto>?> = ownerKeyFlow.flatMapLatest { ownerKey ->
         snapshotStore.observe(ownerKey, CacheKeys.DISCOVER_USERS, UsersData.serializer())
             .map { it?.users }
-    }
+    }.flowOn(Dispatchers.Default)
 
     suspend fun profile(): ApiResult<UserDto> {
         val result = executor.execute { service -> service.profile() }

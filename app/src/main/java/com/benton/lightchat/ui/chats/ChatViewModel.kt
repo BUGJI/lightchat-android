@@ -177,15 +177,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             if (target is ChatTarget.Private) {
-                viewModelScope.launch { loadContact(key, target.chatId, target.otherUserId) }
+                launch { loadContact(key, target.chatId, target.otherUserId) }
             } else if (target is ChatTarget.Channel) {
-                viewModelScope.launch { loadChannelExtras(key, target.id) }
+                launch { loadChannelExtras(key, target.id) }
             }
 
             syncCoordinator.setActive(ref)
             syncCoordinator.requestSync()
 
-            viewModelScope.launch {
+            launch {
                 val cached = chatRepository.countMessages(key, ref)
                 if (cached == 0L) {
                     _state.update { it.copy(initialSyncing = true) }

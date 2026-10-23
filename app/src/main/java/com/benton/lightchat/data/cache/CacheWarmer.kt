@@ -16,6 +16,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CacheWarmer(
     private val scope: CoroutineScope,
@@ -27,11 +28,10 @@ class CacheWarmer(
     private val serverRepository: ServerRepository,
 ) {
 
-    private var running = false
+    private val running = AtomicBoolean(false)
 
     fun warm() {
-        if (running) return
-        running = true
+        if (!running.compareAndSet(false, true)) return
         scope.launch {
             try {
                 val prefs = preferences.current()
@@ -65,7 +65,7 @@ class CacheWarmer(
                     }
                 }
             } finally {
-                running = false
+                running.set(false)
             }
         }
     }

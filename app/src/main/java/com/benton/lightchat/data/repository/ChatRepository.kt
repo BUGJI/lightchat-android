@@ -51,6 +51,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
@@ -78,13 +79,15 @@ class ChatRepository(
         .distinctUntilChanged()
 
     fun observeChannels(ownerKey: String): Flow<List<ChannelDto>> =
-        localStore.observeChannels(ownerKey).map { items -> items.map { it.toDto() } }
+        localStore.observeChannels(ownerKey)
+            .map { items -> items.map { it.toDto() } }
+            .flowOn(Dispatchers.Default)
 
     fun observeDiscoverableChannels(): Flow<List<ChannelDto>?> =
         ownerKeyFlow.flatMapLatest { ownerKey ->
             snapshotStore.observe(ownerKey, CacheKeys.DISCOVER_CHANNELS, ChannelsData.serializer())
                 .map { it?.channels }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeChannelInfo(channelId: Long): Flow<ChannelMembersData?> =
         ownerKeyFlow.flatMapLatest { ownerKey ->
@@ -93,20 +96,24 @@ class ChatRepository(
                 CacheKeys.channelInfo(channelId),
                 ChannelMembersData.serializer(),
             )
-        }
+        }.flowOn(Dispatchers.Default)
 
     suspend fun channel(ownerKey: String, channelId: Long): ChannelDto? =
         localStore.channel(ownerKey, channelId)
 
     fun observePrivateChats(ownerKey: String): Flow<List<PrivateChatDto>> =
-        localStore.observePrivateChats(ownerKey).map { items -> items.map { it.toDto() } }
+        localStore.observePrivateChats(ownerKey)
+            .map { items -> items.map { it.toDto() } }
+            .flowOn(Dispatchers.Default)
 
     fun observeMessages(
         ownerKey: String,
         ref: ConversationRef,
         limit: Int,
     ): Flow<List<MessageDto>> =
-        localStore.observeMessages(ownerKey, ref, limit).map { items -> items.map { it.toDto() } }
+        localStore.observeMessages(ownerKey, ref, limit)
+            .map { items -> items.map { it.toDto() } }
+            .flowOn(Dispatchers.Default)
 
     suspend fun cursor(ownerKey: String, ref: ConversationRef): ConversationCursor? =
         localStore.cursor(ownerKey, ref)

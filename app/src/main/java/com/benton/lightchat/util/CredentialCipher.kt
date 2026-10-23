@@ -18,6 +18,9 @@ object CredentialCipher {
     private const val TAG_BITS = 128
     private const val STORAGE_PREFIX = "enc:v1:"
 
+    @Volatile
+    private var cachedKey: SecretKey? = null
+
     fun encrypt(plainText: String): String? = runCatching {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
@@ -45,10 +48,17 @@ object CredentialCipher {
         else -> decrypt(value) ?: value
     }
 
+    @Synchronized
     private fun getOrCreateKey(): SecretKey {
+        cachedKey?.let { return it }
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)
-            ?.let { return it.secretKey }
+        val key = (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+            ?: generateKey()
+        cachedKey = key
+        return key
+    }
+
+    private fun generateKey(): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(

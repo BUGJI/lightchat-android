@@ -483,7 +483,6 @@ class ChatLocalStore(private val database: ChatDatabase) {
             dao.deleteAllPrivateChats()
             dao.deleteAllContacts()
             dao.deleteAllDrafts()
-            dao.deleteAllSyncState()
         }
     }
 

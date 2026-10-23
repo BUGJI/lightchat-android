@@ -11,10 +11,12 @@ import com.benton.lightchat.data.remote.ApiResult
 import com.benton.lightchat.data.remote.HealthData
 import com.benton.lightchat.data.remote.ServerStatusData
 import com.benton.lightchat.util.UrlUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import retrofit2.Response
 import java.net.ConnectException
@@ -44,7 +46,7 @@ class ServerRepository(
 
     fun observeServerStatus(): Flow<ServerStatusData?> = ownerKeyFlow.flatMapLatest { ownerKey ->
         snapshotStore.observe(ownerKey, CacheKeys.SERVER_STATUS, ServerStatusData.serializer())
-    }
+    }.flowOn(Dispatchers.Default)
 
     suspend fun testConnection(input: String): ServerTestResult {
         val normalized = UrlUtils.normalize(input)

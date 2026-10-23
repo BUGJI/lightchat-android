@@ -124,7 +124,7 @@ fun MainScreen(
         }
     }
 
-    LaunchedEffect(state.friendPending, state.offline) {
+    LaunchedEffect(state.friendPending, state.offline, friendsState.requests.size) {
         if (!state.offline && state.friendPending > friendsState.requests.size) {
             friendsViewModel.load()
         }
@@ -390,7 +390,9 @@ private fun ContactsTab(
     onOpenFriend: (Long, String) -> Unit,
 ) {
     var section by rememberSaveable { mutableIntStateOf(0) }
-    val joinedChannels = state.channels.filter { it.isJoined }
+    val joinedChannels = remember(state.channels) {
+        state.channels.filter { it.isJoined }
+    }
 
     Column(Modifier.fillMaxSize()) {
         SingleChoiceSegmentedButtonRow(
