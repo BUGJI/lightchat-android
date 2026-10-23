@@ -21,8 +21,8 @@ android {
         applicationId = "com.benton.lightchat"
         minSdk = 24
         targetSdk = 37
-        versionCode = releaseVersionCode ?: 10002
-        versionName = releaseVersionName ?: "1.0.2"
+        versionCode = releaseVersionCode ?: 10003
+        versionName = releaseVersionName ?: "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -23,18 +23,14 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,14 +45,12 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -255,7 +249,6 @@ fun MainScreen(
                             onOpenChannel = onOpenChannel,
                             onOpenPrivate = onOpenPrivate,
                             onOpenAdd = onOpenAdd,
-                            onLeaveChannel = viewModel::leaveChannel,
                         )
                     }
 
@@ -272,7 +265,6 @@ fun MainScreen(
                             onOpenAdd = onOpenAdd,
                             onOpenFriends = onOpenFriends,
                             onOpenFriend = friendsViewModel::openChat,
-                            onLeaveChannel = viewModel::leaveChannel,
                         )
                     }
 
@@ -294,7 +286,6 @@ private fun MessagesTab(
     onOpenChannel: (Long, String) -> Unit,
     onOpenPrivate: (Long, Long, String) -> Unit,
     onOpenAdd: () -> Unit,
-    onLeaveChannel: (ChannelDto) -> Unit,
 ) {
     if (state.loading) {
         LoadingBox()
@@ -355,7 +346,6 @@ private fun MessagesTab(
                     preview = channel.lastMessage.orEmpty(),
                     time = TimeFormat.chatTimestamp(channel.lastMessageAt ?: channel.createdAt),
                     onClick = { onOpenChannel(channel.id, channel.displayName) },
-                    onLeave = { onLeaveChannel(channel) },
                 )
             } else {
                 val chat = entry.chat ?: return@items
@@ -385,7 +375,6 @@ private fun ContactsTab(
     onOpenAdd: () -> Unit,
     onOpenFriends: () -> Unit,
     onOpenFriend: (Long, String) -> Unit,
-    onLeaveChannel: (ChannelDto) -> Unit,
 ) {
     var section by rememberSaveable { mutableIntStateOf(0) }
     val joinedChannels = state.channels.filter { it.isJoined }
@@ -531,7 +520,6 @@ private fun ContactsTab(
                             preview = channel.lastMessage.orEmpty(),
                             time = TimeFormat.chatTimestamp(channel.lastMessageAt ?: channel.createdAt),
                             onClick = { onOpenChannel(channel.id, channel.displayName) },
-                            onLeave = { onLeaveChannel(channel) },
                         )
                         HorizontalDivider(modifier = Modifier.padding(start = 76.dp))
                     }
@@ -572,11 +560,7 @@ private fun ChannelRow(
     preview: String,
     time: String,
     onClick: () -> Unit,
-    onLeave: (() -> Unit)? = null,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-    var confirmLeave by remember { mutableStateOf(false) }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -651,48 +635,6 @@ private fun ChannelRow(
                 }
             }
         }
-        if (onLeave != null) {
-            Box {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多")
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = {
-                            Text("退出群聊", color = MaterialTheme.colorScheme.error)
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            confirmLeave = true
-                        },
-                    )
-                }
-            }
-        }
-    }
-
-    if (confirmLeave) {
-        AlertDialog(
-            onDismissRequest = { confirmLeave = false },
-            title = { Text("退出群聊") },
-            text = { Text("退出后将不再接收「${channel.displayName}」的消息，确定退出？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmLeave = false
-                        onLeave?.invoke()
-                    },
-                ) {
-                    Text("退出", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmLeave = false }) { Text("取消") }
-            },
-        )
     }
 }
 
