@@ -1,8 +1,16 @@
 package com.benton.lightchat.data.repository
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import com.benton.lightchat.data.local.AppPreferences
+import com.benton.lightchat.data.local.AttachmentCache
+import com.benton.lightchat.data.local.ChatLocalStore
+import com.benton.lightchat.data.local.ConversationCursor
+import com.benton.lightchat.data.local.ConversationRef
+import com.benton.lightchat.data.local.toDto
 import com.benton.lightchat.data.remote.ApiExecutor
 import com.benton.lightchat.data.remote.ApiResult
 import com.benton.lightchat.data.remote.ChannelCreateData
@@ -15,14 +23,15 @@ import com.benton.lightchat.data.remote.CreatePrivateData
 import com.benton.lightchat.data.remote.CreatePrivateRequest
 import com.benton.lightchat.data.remote.DeleteChannelRequest
 import com.benton.lightchat.data.remote.DeleteMessageRequest
+import com.benton.lightchat.data.remote.EmptyData
+import com.benton.lightchat.data.remote.HistoryData
 import com.benton.lightchat.data.remote.InviteChannelRequest
 import com.benton.lightchat.data.remote.MemberActionRequest
 import com.benton.lightchat.data.remote.MemberActionResult
-import com.benton.lightchat.data.remote.PrivateContactData
-import com.benton.lightchat.data.remote.EmptyData
-import com.benton.lightchat.data.remote.HistoryData
+import com.benton.lightchat.data.remote.MessageDto
 import com.benton.lightchat.data.remote.PrivateChatDto
 import com.benton.lightchat.data.remote.PrivateChatsData
+import com.benton.lightchat.data.remote.PrivateContactData
 import com.benton.lightchat.data.remote.RecallRequest
 import com.benton.lightchat.data.remote.RecallResultData
 import com.benton.lightchat.data.remote.SearchMessagesData
@@ -32,19 +41,345 @@ import com.benton.lightchat.data.remote.SyncData
 import com.benton.lightchat.data.remote.UpdateChannelRequest
 import com.benton.lightchat.data.remote.UpdatePrivateContactRequest
 import com.benton.lightchat.data.remote.UploadData
-import kotlinx.serialization.json.JsonElement
+import com.benton.lightchat.util.ImageCompressor
+import com.benton.lightchat.util.UrlUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import okio.BufferedSink
+import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
 
 class ChatRepository(
     private val context: Context,
     private val executor: ApiExecutor,
+    private val preferences: AppPreferences,
+    private val localStore: ChatLocalStore,
+    private val attachmentCache: AttachmentCache,
 ) {
+
+    fun observeChannels(ownerKey: String): Flow<List<ChannelDto>> =
+        localStore.observeChannels(ownerKey).map { items -> items.map { it.toDto() } }
+
+    suspend fun channel(ownerKey: String, channelId: Long): ChannelDto? =
+        localStore.channel(ownerKey, channelId)
+
+    fun observePrivateChats(ownerKey: String): Flow<List<PrivateChatDto>> =
+        localStore.observePrivateChats(ownerKey).map { items -> items.map { it.toDto() } }
+
+    fun observeMessages(
+        ownerKey: String,
+        ref: ConversationRef,
+        limit: Int,
+    ): Flow<List<MessageDto>> =
+        localStore.observeMessages(ownerKey, ref, limit).map { items -> items.map { it.toDto() } }
+
+    suspend fun cursor(ownerKey: String, ref: ConversationRef): ConversationCursor? =
+        localStore.cursor(ownerKey, ref)
+
+    suspend fun countMessages(ownerKey: String, ref: ConversationRef): Long =
+        localStore.countMessages(ownerKey, ref)
+
+    suspend fun countMessagesBefore(ownerKey: String, ref: ConversationRef, beforeId: Long): Long =
+        localStore.countMessagesBefore(ownerKey, ref, beforeId)
+
+    suspend fun countMessagesFrom(ownerKey: String, ref: ConversationRef, fromId: Long): Long =
+        localStore.countMessagesFrom(ownerKey, ref, fromId)
+
+    suspend fun syncLists(ownerKey: String): Boolean {
+        val result = sync(lists = true)
+        return when (result) {
+            is ApiResult.Success -> {
+                result.data?.let { localStore.applyLists(ownerKey, it) }
+                true
+            }
+
+            is ApiResult.Failure -> false
+        }
+    }
+
+    suspend fun syncConversation(ownerKey: String, ref: ConversationRef): Boolean {
+        val cursor = localStore.cursor(ownerKey, ref)
+        val result = executor.execute { service ->
+            if (ref.isChannel) {
+                service.sync(
+                    channels = ref.id.toString(),
+                    sinceId = cursor?.lastMessageId?.takeIf { it > 0 },
+                    recallSinceId = cursor?.recallId?.takeIf { it > 0 },
+                    lists = 0,
+                )
+            } else {
+                service.sync(
+                    privateChatId = ref.id,
+                    privateSinceId = cursor?.lastMessageId?.takeIf { it > 0 },
+                    recallSinceId = cursor?.recallId?.takeIf { it > 0 },
+                    lists = 0,
+                )
+            }
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                result.data?.let { localStore.applySync(ownerKey, ref, it) }
+                true
+            }
+
+            is ApiResult.Failure -> false
+        }
+    }
+
+    suspend fun refreshHistory(ownerKey: String, ref: ConversationRef): Boolean =
+        fetchHistory(ownerKey, ref, before = null)
+
+    suspend fun loadOlderHistory(
+        ownerKey: String,
+        ref: ConversationRef,
+        beforeId: Long,
+    ): Boolean = fetchHistory(ownerKey, ref, before = beforeId)
+
+    suspend fun message(ownerKey: String, ref: ConversationRef, messageId: Long): MessageDto? =
+        localStore.message(ownerKey, ref, messageId)
+
+    suspend fun ensureMessageAvailable(
+        ownerKey: String,
+        ref: ConversationRef,
+        messageId: Long,
+    ): Boolean {
+        if (localStore.hasMessage(ownerKey, ref, messageId)) return true
+        if (localStore.oldestMessageId(ownerKey, ref) == null) {
+            if (!refreshHistory(ownerKey, ref)) return false
+            if (localStore.hasMessage(ownerKey, ref, messageId)) return true
+        }
+        repeat(20) {
+            val cursor = localStore.cursor(ownerKey, ref)
+            if (cursor?.historyComplete == true) return false
+            val oldest = localStore.oldestMessageId(ownerKey, ref) ?: return false
+            if (!loadOlderHistory(ownerKey, ref, oldest)) return false
+            if (localStore.hasMessage(ownerKey, ref, messageId)) return true
+        }
+        return false
+    }
+
+    suspend fun cacheOutgoing(ownerKey: String, ref: ConversationRef, message: MessageDto) {
+        localStore.cacheOutgoing(ownerKey, ref, message)
+    }
+
+    suspend fun markRecalled(ownerKey: String, ref: ConversationRef, messageId: Long) {
+        localStore.markRecalled(ownerKey, ref, messageId)
+    }
+
+    suspend fun deleteCachedMessage(ownerKey: String, ref: ConversationRef, messageId: Long) {
+        localStore.deleteMessage(ownerKey, ref, messageId)
+    }
+
+    suspend fun deleteCachedAttachment(url: String?) {
+        if (url.isNullOrBlank()) return
+        if (localStore.countMessagesByFileUrl(url) == 0) {
+            attachmentCache.delete(url)
+        }
+    }
+
+    suspend fun syncGlobal(
+        ownerKey: String,
+        channelIds: List<Long>,
+        activeRef: ConversationRef?,
+    ): ApiResult<SyncData> {
+        val state = localStore.syncState(ownerKey)
+        val channelCursor = if ((state?.channelCursor ?: 0) == 0L) {
+            localStore.maxChannelMessageId(ownerKey) ?: 0L
+        } else {
+            state?.channelCursor ?: 0L
+        }
+        val activePrivate = activeRef?.takeUnless { it.isChannel }
+        val privateSince = activePrivate?.let { ref ->
+            if (state?.privateChatId == ref.id) {
+                state.privateCursor
+            } else {
+                localStore.latestMessageId(ownerKey, ref) ?: 0
+            }
+        }
+        return executor.execute { service ->
+            service.sync(
+                channels = channelIds.takeIf { it.isNotEmpty() }?.joinToString(","),
+                sinceId = channelCursor.takeIf { it > 0 },
+                privateChatId = activePrivate?.id,
+                privateSinceId = if (activePrivate != null) privateSince ?: 0L else null,
+                recallSinceId = state?.recallCursor?.takeIf { it > 0 },
+                lists = 1,
+            )
+        }
+    }
+
+    suspend fun markChannelRead(ownerKey: String, channelId: Long): Boolean {
+        val ref = ConversationRef.channel(channelId)
+        val latest = localStore.latestMessageId(ownerKey, ref)
+        val result = markChannelRead(channelId)
+        if (result is ApiResult.Success) {
+            localStore.markChannelRead(ownerKey, channelId)
+            if (latest != null) localStore.setLastRead(ownerKey, ref, latest)
+            return true
+        }
+        return false
+    }
+
+    suspend fun draft(ownerKey: String, ref: ConversationRef): com.benton.lightchat.data.local.entity.DraftEntity? =
+        localStore.draft(ownerKey, ref)
+
+    suspend fun saveDraft(ownerKey: String, ref: ConversationRef, text: String, parentId: Long) =
+        localStore.saveDraft(ownerKey, ref, text, parentId)
+
+    suspend fun clearDraft(ownerKey: String, ref: ConversationRef) =
+        localStore.deleteDraft(ownerKey, ref)
+
+    suspend fun localPrivateContact(ownerKey: String, chatId: Long): PrivateContactData? {
+        val contact = localStore.contact(ownerKey, chatId) ?: return null
+        return PrivateContactData(
+            chatId = contact.chatId,
+            nickname = contact.nickname,
+            dnd = contact.dnd,
+            hidden = 0,
+        )
+    }
+
+    suspend fun savePrivateContactLocal(
+        ownerKey: String,
+        chatId: Long,
+        nickname: String,
+        dnd: Boolean,
+    ) {
+        localStore.savePrivateContact(ownerKey, chatId, nickname, dnd)
+    }
+
+    suspend fun deletePrivateChatLocal(ownerKey: String, chatId: Long) {
+        localStore.deletePrivateChat(ownerKey, chatId)
+    }
+
+    suspend fun searchMessages(
+        ownerKey: String,
+        ref: ConversationRef,
+        query: String,
+        beforeId: Long? = null,
+        limit: Int = 30,
+        remote: Boolean = true,
+    ): ApiResult<SearchMessagesData> {
+        val local = localStore.searchMessages(ownerKey, ref, query, beforeId, limit)
+        if (!remote) {
+            return ApiResult.Success(
+                SearchMessagesData(
+                    messages = local,
+                    hasMore = local.size >= limit,
+                    query = query,
+                ),
+            )
+        }
+        val remoteResult = if (ref.isChannel) {
+            searchChannelMessages(ref.id, query, beforeId, limit)
+        } else {
+            searchPrivateMessages(ref.id, query, beforeId, limit)
+        }
+        return when (remoteResult) {
+            is ApiResult.Success -> {
+                val data = remoteResult.data
+                val remoteMessages = data?.messages.orEmpty()
+                if (remoteMessages.isNotEmpty()) {
+                    localStore.cacheMessages(ownerKey, ref, remoteMessages)
+                }
+                val merged = (remoteMessages + local)
+                    .distinctBy { it.id }
+                    .sortedByDescending { it.id }
+                    .take(limit)
+                ApiResult.Success(
+                    SearchMessagesData(
+                        messages = merged,
+                        hasMore = data?.hasMore ?: (local.size >= limit),
+                        query = query,
+                    ),
+                )
+            }
+
+            is ApiResult.Failure -> {
+                if (local.isEmpty()) {
+                    remoteResult
+                } else {
+                    ApiResult.Success(
+                        SearchMessagesData(
+                            messages = local,
+                            hasMore = local.size >= limit,
+                            query = query,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun downloadAttachment(
+        url: String,
+        fileNameHint: String? = null,
+        onProgress: (Float) -> Unit = {},
+    ): ApiResult<File> {
+        val baseUrl = preferences.current().baseUrl
+        val resolved = UrlUtils.resolve(baseUrl, url)
+            ?: return ApiResult.Failure("invalid_url", "文件地址无效")
+        return attachmentCache.download(resolved, fileNameHint, onProgress)
+    }
+
+    suspend fun cacheUploadedAttachment(uri: Uri, url: String, fileNameHint: String?) {
+        withContext(Dispatchers.IO) {
+            val baseUrl = preferences.current().baseUrl
+            val resolved = UrlUtils.resolve(baseUrl, url) ?: return@withContext
+            attachmentCache.copyFromUri(uri, resolved, fileNameHint, context.contentResolver)
+        }
+    }
+
+    suspend fun uploadVoice(
+        file: File,
+        onProgress: (Float) -> Unit = {},
+    ): ApiResult<UploadData> = withContext(Dispatchers.IO) {
+        if (!file.exists() || file.length() <= 0) {
+            return@withContext ApiResult.Failure("upload_failed", "录音文件无效")
+        }
+        if (file.length() > 5L * 1024 * 1024) {
+            return@withContext ApiResult.Failure("file_too_large", "语音不能超过 5MB")
+        }
+        val body = FileRequestBody(file, "audio/mp4".toMediaTypeOrNull(), onProgress)
+        val part = MultipartBody.Part.createFormData("file", file.name, body)
+        executor.execute { service -> service.uploadFile(part) }
+    }
+
+    suspend fun cacheUploadedVoice(file: File, url: String, fileNameHint: String?) {
+        withContext(Dispatchers.IO) {
+            val baseUrl = preferences.current().baseUrl
+            val resolved = UrlUtils.resolve(baseUrl, url) ?: return@withContext
+            attachmentCache.copyFromFile(file, resolved, fileNameHint ?: file.name)
+        }
+    }
+
+    private suspend fun fetchHistory(
+        ownerKey: String,
+        ref: ConversationRef,
+        before: Long?,
+    ): Boolean {
+        val result = if (ref.isChannel) {
+            channelHistory(ref.id, before, limit = 100)
+        } else {
+            privateHistory(ref.id, before, limit = 100)
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                result.data?.let { localStore.applyHistory(ownerKey, ref, it) }
+                true
+            }
+
+            is ApiResult.Failure -> false
+        }
+    }
 
     suspend fun sync(
         channelId: Long? = null,
@@ -99,6 +434,9 @@ class ChatRepository(
         content: String,
         type: String = "text",
         fileId: Long? = null,
+        parentId: Long? = null,
+        mentionedUsers: List<Long>? = null,
+        clientMsgId: String? = null,
     ): ApiResult<SendResultData> = executor.execute { service ->
         service.sendChannelMessage(
             SendMessageRequest(
@@ -106,6 +444,9 @@ class ChatRepository(
                 content = content,
                 type = type,
                 fileId = fileId,
+                parentId = parentId,
+                mentionedUsers = mentionedUsers,
+                clientMsgId = clientMsgId,
             ),
         )
     }
@@ -115,6 +456,8 @@ class ChatRepository(
         content: String,
         type: String = "text",
         fileId: Long? = null,
+        parentId: Long? = null,
+        clientMsgId: String? = null,
     ): ApiResult<SendResultData> = executor.execute { service ->
         service.sendPrivateMessage(
             SendMessageRequest(
@@ -122,6 +465,8 @@ class ChatRepository(
                 content = content,
                 type = type,
                 fileId = fileId,
+                parentId = parentId,
+                clientMsgId = clientMsgId,
             ),
         )
     }
@@ -241,18 +586,54 @@ class ChatRepository(
         uri: Uri,
         onProgress: (Float) -> Unit = {},
     ): ApiResult<UploadData> = withContext(Dispatchers.IO) {
-        val size = querySize(uri)
-        if (size != null && size > 12L * 1024 * 1024) {
-            return@withContext ApiResult.Failure("file_too_large", "文件过大（超过 12MB）")
-        }
         val resolver = context.contentResolver
-        val bytes = runCatching { resolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            ?: return@withContext ApiResult.Failure("upload_failed", "无法读取所选文件")
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val name = queryDisplayName(uri) ?: "upload_${System.currentTimeMillis()}"
-        val body = ProgressRequestBody(bytes, mime.toMediaTypeOrNull(), onProgress)
-        val part = MultipartBody.Part.createFormData("file", name, body)
-        executor.execute { service -> service.uploadFile(part) }
+        val displayName = queryDisplayName(uri)
+        val originalMime = resolver.getType(uri)
+            ?: displayName
+                ?.substringAfterLast('.', "")
+                ?.lowercase()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+            ?: "application/octet-stream"
+        val prepared = ImageCompressor.prepare(context, uri)
+        try {
+            val mime = prepared?.mime ?: originalMime
+            val name = prepared?.name ?: displayName ?: "upload_${System.currentTimeMillis()}"
+            val size = prepared?.file?.length() ?: querySize(uri)
+            val category = when {
+                mime.startsWith("image/") -> "image"
+                mime.startsWith("audio/") -> "audio"
+                else -> "file"
+            }
+            val limit = when (category) {
+                "image" -> 2L * 1024 * 1024
+                "audio" -> 5L * 1024 * 1024
+                else -> 5L * 1024 * 1024
+            }
+            if (size != null && size > limit) {
+                val label = when (category) {
+                    "image" -> "图片不能超过 2MB"
+                    "audio" -> "音频不能超过 5MB"
+                    else -> "文件不能超过 5MB"
+                }
+                return@withContext ApiResult.Failure("file_too_large", label)
+            }
+            val body: RequestBody = if (prepared != null) {
+                FileRequestBody(prepared.file, mime.toMediaTypeOrNull(), onProgress)
+            } else {
+                UriRequestBody(
+                    resolver = resolver,
+                    uri = uri,
+                    mediaType = mime.toMediaTypeOrNull(),
+                    length = size ?: -1L,
+                    onProgress = onProgress,
+                )
+            }
+            val part = MultipartBody.Part.createFormData("file", name, body)
+            executor.execute { service -> service.uploadFile(part) }
+        } finally {
+            prepared?.file?.delete()
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String? {
@@ -274,28 +655,63 @@ class ChatRepository(
     }
 }
 
-private class ProgressRequestBody(
-    private val bytes: ByteArray,
+private class FileRequestBody(
+    private val file: File,
     private val mediaType: MediaType?,
     private val onProgress: (Float) -> Unit,
 ) : RequestBody() {
 
     override fun contentType(): MediaType? = mediaType
 
-    override fun contentLength(): Long = bytes.size.toLong()
+    override fun contentLength(): Long = file.length()
 
     override fun writeTo(sink: BufferedSink) {
-        if (bytes.isEmpty()) {
+        val total = file.length()
+        if (total <= 0) {
             onProgress(1f)
             return
         }
-        var offset = 0
-        val chunkSize = 64 * 1024
-        while (offset < bytes.size) {
-            val count = minOf(chunkSize, bytes.size - offset)
-            sink.write(bytes, offset, count)
-            offset += count
-            onProgress(offset.toFloat() / bytes.size)
+        var written = 0L
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                sink.write(buffer, 0, read)
+                written += read
+                onProgress((written.toFloat() / total).coerceIn(0f, 1f))
+            }
         }
+    }
+}
+
+private class UriRequestBody(
+    private val resolver: ContentResolver,
+    private val uri: Uri,
+    private val mediaType: MediaType?,
+    private val length: Long,
+    private val onProgress: (Float) -> Unit,
+) : RequestBody() {
+
+    override fun contentType(): MediaType? = mediaType
+
+    override fun contentLength(): Long = length
+
+    override fun writeTo(sink: BufferedSink) {
+        val input = resolver.openInputStream(uri) ?: throw IOException("无法读取所选文件")
+        input.use { stream ->
+            val buffer = ByteArray(64 * 1024)
+            var written = 0L
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                sink.write(buffer, 0, read)
+                written += read
+                if (length > 0) {
+                    onProgress((written.toFloat() / length).coerceIn(0f, 1f))
+                }
+            }
+        }
+        onProgress(1f)
     }
 }

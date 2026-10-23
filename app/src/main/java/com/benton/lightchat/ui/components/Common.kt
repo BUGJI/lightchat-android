@@ -117,7 +117,7 @@ fun OfflineBanner(modifier: Modifier = Modifier) {
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
         Text(
-            text = "网络连接异常，正在重试…",
+            text = "网络连接异常，正在显示本地缓存并自动重试…",
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             style = MaterialTheme.typography.labelMedium,
         )

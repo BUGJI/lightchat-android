@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.benton.lightchat.LightchatApplication
+import com.benton.lightchat.data.local.AccountKey
 import com.benton.lightchat.data.remote.ApiResult
 import com.benton.lightchat.data.remote.ServerStatusData
 import com.benton.lightchat.ui.theme.ThemeMode
@@ -20,6 +21,7 @@ data class SettingsUiState(
     val loggingOut: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val dynamicColor: Boolean = true,
+    val storageUsedBytes: Long = 0,
 )
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -32,10 +34,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
             val prefs = container.preferences.current()
+            val ownerKey = AccountKey.of(prefs.baseUrl, prefs.userId)
+            val storage = runCatching { container.storageManager.snapshot(ownerKey) }.getOrNull()
             _state.update {
                 it.copy(
                     themeMode = ThemeMode.fromValue(prefs.themeMode),
                     dynamicColor = prefs.dynamicColor,
+                    storageUsedBytes = storage?.totalBytes ?: it.storageUsedBytes,
                 )
             }
             when (val result = container.serverRepository.serverStatus()) {

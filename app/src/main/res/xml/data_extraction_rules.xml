@@ -5,15 +5,15 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="image_cache/" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="database" path="." />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="image_cache/" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="database" path="." />
     </device-transfer>
-    -->
 </data-extraction-rules>

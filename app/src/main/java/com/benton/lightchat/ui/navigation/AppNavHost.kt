@@ -21,6 +21,7 @@ import com.benton.lightchat.ui.profile.EmailVerificationScreen
 import com.benton.lightchat.ui.profile.NotificationSettingsScreen
 import com.benton.lightchat.ui.profile.SessionsScreen
 import com.benton.lightchat.ui.profile.SettingsScreen
+import com.benton.lightchat.ui.profile.StorageScreen
 import com.benton.lightchat.ui.profile.TwoFactorScreen
 import com.benton.lightchat.ui.profile.UpdateViewModel
 import com.benton.lightchat.ui.profile.UserProfileScreen
@@ -179,12 +180,19 @@ fun MainNavHost(
                 serverUrl = baseUrl,
                 onBack = { navController.popBackStack() },
                 onChangeServer = { navController.navigate("server") },
+                onOpenStorage = { navController.navigate("settings/storage") },
                 onOpenNotifications = { navController.navigate("settings/notifications") },
                 onOpenPassword = { navController.navigate("settings/password") },
                 onOpenSessions = { navController.navigate("settings/sessions") },
                 onOpenTwoFactor = { navController.navigate("settings/two-factor") },
                 onOpenEmailVerification = { navController.navigate("settings/email") },
                 updateViewModel = updateViewModel,
+            )
+        }
+
+        composable("settings/storage") {
+            StorageScreen(
+                onBack = { navController.popBackStack() },
             )
         }
 

@@ -140,6 +140,14 @@ fun ServerConfigScreen(
                 isError = input.isNotBlank() && normalized == null,
             )
 
+            if (normalized?.startsWith("http://") == true) {
+                Text(
+                    text = "当前使用明文 HTTP，账号、消息和文件都可能被窃听，建议为服务器配置 HTTPS。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),

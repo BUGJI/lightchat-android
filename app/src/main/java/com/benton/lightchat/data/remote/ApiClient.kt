@@ -1,5 +1,6 @@
 package com.benton.lightchat.data.remote
 
+import com.benton.lightchat.BuildConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
 import okhttp3.MediaType.Companion.toMediaType
@@ -23,7 +24,7 @@ class ApiClient(private val tokenStore: TokenStore) {
         namingStrategy = JsonNamingStrategy.SnakeCase
     }
 
-    private val client = OkHttpClient.Builder()
+    val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
@@ -38,8 +39,18 @@ class ApiClient(private val tokenStore: TokenStore) {
             }
             chain.proceed(request)
         }
-        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+        .apply {
+            if (BuildConfig.DEBUG) {
+                addInterceptor(
+                    HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    },
+                )
+            }
+        }
         .build()
+
+    private val client: OkHttpClient get() = httpClient
 
     @Volatile
     private var retrofit: Retrofit? = null

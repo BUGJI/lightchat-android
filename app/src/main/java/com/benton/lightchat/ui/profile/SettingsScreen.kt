@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -54,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ServerStatusData
 import com.benton.lightchat.ui.theme.ThemeMode
+import com.benton.lightchat.util.SizeFormat
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,6 +64,7 @@ fun SettingsScreen(
     serverUrl: String?,
     onBack: () -> Unit,
     onChangeServer: () -> Unit,
+    onOpenStorage: () -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenPassword: () -> Unit,
     onOpenSessions: () -> Unit,
@@ -189,6 +192,29 @@ fun SettingsScreen(
                     )
                     OutlinedButton(onClick = onChangeServer, modifier = Modifier.fillMaxWidth()) {
                         Text("更换服务器")
+                    }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.Storage,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("存储空间", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text(
+                        text = "本地聊天记录、图片与文件缓存共占用 " +
+                            SizeFormat.format(state.storageUsedBytes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onOpenStorage, modifier = Modifier.fillMaxWidth()) {
+                        Text("管理存储空间")
                     }
                 }
             }

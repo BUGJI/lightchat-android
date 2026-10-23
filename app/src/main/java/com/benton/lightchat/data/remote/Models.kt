@@ -105,6 +105,17 @@ data class RecalledByDto(
 )
 
 @Serializable
+data class ParentMessageDto(
+    val id: Long = 0,
+    val username: String = "",
+    val type: String = "text",
+    val content: String = "",
+    val fileUrl: String? = null,
+    val deleted: Boolean = false,
+    val recalled: Boolean = false,
+)
+
+@Serializable
 data class MessageDto(
     val id: Long = 0,
     val channelId: Long? = null,
@@ -117,14 +128,18 @@ data class MessageDto(
     val avatar: String? = null,
     val role: String? = null,
     val parentId: Long = 0,
+    val parent: ParentMessageDto? = null,
     val type: String = "text",
     val content: String = "",
     val fileUrl: String? = null,
     val fileSize: Long? = null,
+    val fileId: Long? = null,
     val mentionedUsers: String? = null,
     val recalledBy: RecalledByDto? = null,
     val isRead: Int = 0,
     val createdAt: String = "",
+    val status: String = "sent",
+    val clientMsgId: String? = null,
 ) {
     val isPrivate: Boolean get() = privateChatId != null || chatId != null
 
@@ -162,6 +177,7 @@ data class SyncData(
     val recallLatestId: Long = 0,
     val channels: List<ChannelDto> = emptyList(),
     val privateChats: List<PrivateChatDto> = emptyList(),
+    val friendPending: Int = 0,
 )
 
 @Serializable
@@ -173,6 +189,7 @@ data class SendMessageRequest(
     val parentId: Long? = null,
     val mentionedUsers: List<Long>? = null,
     val fileId: Long? = null,
+    val clientMsgId: String? = null,
 )
 
 @Serializable
@@ -180,6 +197,7 @@ data class SendResultData(
     val messageId: Long = 0,
     val chatId: Long? = null,
     val content: String = "",
+    val duplicate: Boolean = false,
 )
 
 @Serializable

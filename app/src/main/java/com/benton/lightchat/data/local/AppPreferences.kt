@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.benton.lightchat.util.CredentialCipher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
@@ -62,7 +63,7 @@ class AppPreferences(private val context: Context) {
         .map { prefs ->
             PrefsState(
                 baseUrl = prefs[Keys.BASE_URL],
-                token = prefs[Keys.TOKEN],
+                token = prefs[Keys.TOKEN]?.let { CredentialCipher.decrypt(it) ?: it },
                 tokenExpiresAt = prefs[Keys.TOKEN_EXPIRES_AT],
                 absoluteExpiresAt = prefs[Keys.ABSOLUTE_EXPIRES_AT],
                 userId = prefs[Keys.USER_ID] ?: 0,
@@ -96,7 +97,7 @@ class AppPreferences(private val context: Context) {
         role: String?,
     ) {
         context.lightchatDataStore.edit { prefs ->
-            prefs[Keys.TOKEN] = token
+            prefs[Keys.TOKEN] = CredentialCipher.encrypt(token) ?: token
             if (expiresAt == null) prefs.remove(Keys.TOKEN_EXPIRES_AT) else prefs[Keys.TOKEN_EXPIRES_AT] = expiresAt
             if (absoluteExpiresAt == null) {
                 prefs.remove(Keys.ABSOLUTE_EXPIRES_AT)
@@ -111,8 +112,16 @@ class AppPreferences(private val context: Context) {
 
     suspend fun updateToken(token: String, expiresAt: String?) {
         context.lightchatDataStore.edit { prefs ->
-            prefs[Keys.TOKEN] = token
+            prefs[Keys.TOKEN] = CredentialCipher.encrypt(token) ?: token
             if (expiresAt == null) prefs.remove(Keys.TOKEN_EXPIRES_AT) else prefs[Keys.TOKEN_EXPIRES_AT] = expiresAt
+        }
+    }
+
+    suspend fun migrateTokenEncryption() {
+        context.lightchatDataStore.edit { prefs ->
+            val raw = prefs[Keys.TOKEN] ?: return@edit
+            if (CredentialCipher.decrypt(raw) != null) return@edit
+            CredentialCipher.encrypt(raw)?.let { prefs[Keys.TOKEN] = it }
         }
     }
 

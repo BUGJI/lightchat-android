@@ -1,12 +1,16 @@
 package com.benton.lightchat.ui.chats
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.media.MediaPlayer
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,14 +44,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +66,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,15 +85,19 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,23 +112,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
+import com.benton.lightchat.data.remote.ChannelMemberDto
 import com.benton.lightchat.data.remote.MessageDto
+import com.benton.lightchat.data.remote.ParentMessageDto
 import com.benton.lightchat.ui.components.EmptyState
 import com.benton.lightchat.ui.components.LoadingBox
 import com.benton.lightchat.ui.components.OfflineBanner
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.util.TimeFormat
 import com.benton.lightchat.util.UrlUtils
+import com.benton.lightchat.util.VoiceRecorder
 import androidx.compose.material.icons.filled.Forum
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,7 +148,6 @@ fun ChatScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = remember(context) {
@@ -157,6 +176,7 @@ fun ChatScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var showContactSettings by remember { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var showAnnouncement by remember { mutableStateOf(false) }
     val displayTitle = if (target is ChatTarget.Private && state.contactNickname.isNotBlank()) {
         state.contactNickname
     } else {
@@ -164,12 +184,6 @@ fun ChatScreen(
     }
 
     LaunchedEffect(target) { viewModel.open(target) }
-
-    LaunchedEffect(target, lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            viewModel.pollLoop()
-        }
-    }
 
     LaunchedEffect(state.error) {
         state.error?.let {
@@ -187,6 +201,11 @@ fun ChatScreen(
                         Text(
                             text = when {
                                 target is ChatTarget.Channel -> "频道"
+                                !state.contactLastActive.isNullOrBlank() -> buildString {
+                                    append(TimeFormat.relativeActive(state.contactLastActive))
+                                    if (state.contactDnd) append(" · 消息免打扰")
+                                }
+
                                 state.contactDnd -> "私聊 · 消息免打扰"
                                 else -> "私聊"
                             },
@@ -252,13 +271,23 @@ fun ChatScreen(
             if (state.offline) {
                 OfflineBanner()
             }
+            if (target is ChatTarget.Channel && !state.announcement.isNullOrBlank()) {
+                AnnouncementBanner(
+                    text = state.announcement.orEmpty(),
+                    onClick = { showAnnouncement = true },
+                )
+            }
             Box(Modifier.weight(1f)) {
                 when {
                     state.loading -> LoadingBox()
                     state.messages.isEmpty() -> EmptyState(
                         icon = Icons.Filled.Forum,
                         title = "还没有消息",
-                        description = "发送第一条消息吧",
+                        description = if (state.offline) {
+                            "本地暂无缓存，联网后自动加载"
+                        } else {
+                            "发送第一条消息吧"
+                        },
                     )
 
                     else -> MessageList(
@@ -269,9 +298,14 @@ fun ChatScreen(
                         recallEnabled = state.recallEnabled,
                         hasMore = state.hasMore,
                         loadingOlder = state.loadingOlder,
+                        unreadAnchorId = state.unreadAnchorId,
                         onLoadOlder = viewModel::loadOlder,
                         onRecall = viewModel::recall,
                         onDelete = viewModel::delete,
+                        onRetry = viewModel::retry,
+                        onDiscard = viewModel::discard,
+                        onReply = viewModel::replyTo,
+                        onOpenParent = viewModel::openParent,
                         onCopy = { text ->
                             clipboard?.setPrimaryClip(ClipData.newPlainText("消息", text))
                             scope.launch { snackbarHostState.showSnackbar("已复制") }
@@ -279,18 +313,36 @@ fun ChatScreen(
                         focusMessageId = state.focusMessageId,
                         onFocusConsumed = viewModel::consumeFocus,
                         onPreviewImage = { previewUrl = it },
-                        onOpenFile = { url ->
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        onOpenFile = { message ->
+                            viewModel.downloadAttachment(message) { file ->
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file,
                                 )
-                            }.onFailure { error ->
-                                if (error is ActivityNotFoundException) {
-                                    // No app can handle this file type.
+                                val mime = MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(file.extension.lowercase())
+                                    ?: "application/octet-stream"
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW)
+                                            .setDataAndType(uri, mime)
+                                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }.onFailure { error ->
+                                    if (error is ActivityNotFoundException) {
+                                        Toast.makeText(
+                                            context,
+                                            "没有可打开此文件的应用",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
                                 }
                             }
                         },
+                        downloadingFileId = state.downloadingFileId,
+                        downloadProgress = state.downloadProgress,
                     )
                 }
                 if (state.locating) {
@@ -313,9 +365,18 @@ fun ChatScreen(
                 sending = state.sending,
                 uploading = state.uploading,
                 uploadProgress = state.uploadProgress,
-                onSendText = viewModel::sendText,
-                onPickImage = { uri -> viewModel.sendAttachment(uri, true) },
+                offline = state.offline,
+                members = state.members,
+                replyTo = state.replyTo,
+                draft = state.draftText,
+                onDraftChange = viewModel::onDraftChange,
+                onCancelReply = viewModel::clearReply,
+                onSendText = { text, mentions, done ->
+                    viewModel.sendText(text, mentions, done)
+                },
+                onPickImages = { uris -> viewModel.sendAttachments(uris, true) },
                 onPickFile = { uri -> viewModel.sendAttachment(uri, false) },
+                onSendVoice = { file, duration -> viewModel.sendVoice(file, duration) },
                 onCancelUpload = viewModel::cancelUpload,
             )
         }
@@ -367,6 +428,17 @@ fun ChatScreen(
         )
     }
 
+    if (showAnnouncement) {
+        AlertDialog(
+            onDismissRequest = { showAnnouncement = false },
+            title = { Text("频道公告") },
+            text = { Text(state.announcement.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = { showAnnouncement = false }) { Text("知道了") }
+            },
+        )
+    }
+
     if (searchOpen) {
         SearchMessagesDialog(
             query = state.searchQuery,
@@ -374,6 +446,8 @@ fun ChatScreen(
             searching = state.searching,
             loadingMore = state.searchLoadingMore,
             hasMore = state.searchHasMore,
+            filter = state.searchFilter,
+            onFilterChange = viewModel::setSearchFilter,
             onQueryChange = viewModel::search,
             onLoadMore = viewModel::loadMoreSearch,
             onSelect = { message ->
@@ -390,13 +464,43 @@ fun ChatScreen(
 }
 
 @Composable
+private fun AnnouncementBanner(text: String, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Campaign,
+                contentDescription = "公告",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "公告：$text",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun ImagePreviewDialog(
     url: String,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
     onSave: (String) -> Unit,
 ) {
-    var scale by remember(url) { mutableStateOf(1f) }
+    var scale by remember(url) { mutableFloatStateOf(1f) }
     var offset by remember(url) { mutableStateOf(Offset.Zero) }
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         val next = (scale * zoomChange).coerceIn(1f, 5f)
@@ -482,6 +586,8 @@ private fun SearchMessagesDialog(
     searching: Boolean,
     loadingMore: Boolean,
     hasMore: Boolean,
+    filter: SearchFilter,
+    onFilterChange: (SearchFilter) -> Unit,
     onQueryChange: (String) -> Unit,
     onLoadMore: () -> Unit,
     onSelect: (MessageDto) -> Unit,
@@ -516,6 +622,31 @@ private fun SearchMessagesDialog(
                     )
                 }
                 HorizontalDivider()
+                if (query.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SearchFilter.entries.forEach { item ->
+                            FilterChip(
+                                selected = filter == item,
+                                onClick = { onFilterChange(item) },
+                                label = { Text(item.label) },
+                            )
+                        }
+                    }
+                }
+
+                val visible = results.filter { message ->
+                    when (filter) {
+                        SearchFilter.ALL -> true
+                        SearchFilter.TEXT -> message.type == "text"
+                        SearchFilter.IMAGE -> message.type == "image"
+                        SearchFilter.FILE -> message.type == "file"
+                    }
+                }
 
                 when {
                     searching && results.isEmpty() -> LoadingBox()
@@ -525,14 +656,18 @@ private fun SearchMessagesDialog(
                         description = "输入关键字查找聊天记录",
                     )
 
-                    results.isEmpty() -> EmptyState(
+                    visible.isEmpty() -> EmptyState(
                         icon = Icons.Filled.Search,
                         title = "没有找到相关消息",
-                        description = "换个关键词试试",
+                        description = if (results.isEmpty()) {
+                            "换个关键词试试"
+                        } else {
+                            "当前类型下没有结果，试试「全部」"
+                        },
                     )
 
                     else -> LazyColumn(Modifier.weight(1f)) {
-                        items(results, key = { it.id }) { message ->
+                        items(visible, key = { it.id }) { message ->
                             val preview = when (message.type) {
                                 "image" -> "[图片]"
                                 "file" -> "[文件]"
@@ -561,7 +696,7 @@ private fun SearchMessagesDialog(
                                 }
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    text = preview,
+                                    text = highlightKeyword(preview, query),
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
@@ -679,6 +814,72 @@ private fun ContactSettingsDialog(
     )
 }
 
+private sealed interface ChatListEntry {
+    val key: String
+
+    data class Day(val label: String, override val key: String) : ChatListEntry
+
+    data class Unread(override val key: String) : ChatListEntry
+
+    data class Message(val message: MessageDto) : ChatListEntry {
+        override val key: String get() = "message_${message.id}"
+    }
+}
+
+private fun buildMessageEntries(
+    messages: List<MessageDto>,
+    unreadAnchorId: Long,
+): List<ChatListEntry> {
+    val result = ArrayList<ChatListEntry>(messages.size + 4)
+    var lastDay: String? = null
+    var unreadInserted = false
+    messages.forEach { message ->
+        val day = message.createdAt.take(10)
+        if (day.isNotBlank() && day != lastDay) {
+            lastDay = day
+            result += ChatListEntry.Day(TimeFormat.dayLabel(message.createdAt), "day_$day")
+        }
+        if (!unreadInserted && unreadAnchorId > 0 && message.id > unreadAnchorId) {
+            unreadInserted = true
+            result += ChatListEntry.Unread("unread")
+        }
+        result += ChatListEntry.Message(message)
+    }
+    return result
+}
+
+@Composable
+private fun DaySeparator(label: String) {
+    Text(
+        text = label,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+    )
+}
+
+@Composable
+private fun UnreadSeparator() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f))
+        Text(
+            text = "以下是新消息",
+            modifier = Modifier.padding(horizontal = 8.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        HorizontalDivider(Modifier.weight(1f))
+    }
+}
+
 @Composable
 private fun MessageList(
     messages: List<MessageDto>,
@@ -688,20 +889,31 @@ private fun MessageList(
     recallEnabled: Boolean,
     hasMore: Boolean,
     loadingOlder: Boolean,
+    unreadAnchorId: Long,
     onLoadOlder: () -> Unit,
     onRecall: (MessageDto) -> Unit,
     onDelete: (MessageDto) -> Unit,
+    onRetry: (MessageDto) -> Unit,
+    onDiscard: (MessageDto) -> Unit,
+    onReply: (MessageDto) -> Unit,
+    onOpenParent: (Long) -> Unit,
     onCopy: (String) -> Unit,
     focusMessageId: Long?,
     onFocusConsumed: () -> Unit,
     onPreviewImage: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: (MessageDto) -> Unit,
+    downloadingFileId: Long?,
+    downloadProgress: Float?,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
     var newMessageCount by remember { mutableIntStateOf(0) }
-    val lastItemIndex = messages.lastIndex + if (hasMore || loadingOlder) 1 else 0
+    val entries = remember(messages, unreadAnchorId) {
+        buildMessageEntries(messages, unreadAnchorId)
+    }
+    val headerOffset = if (hasMore || loadingOlder) 1 else 0
+    val lastItemIndex = entries.lastIndex + headerOffset
 
     LaunchedEffect(messages.lastOrNull()?.id) {
         val last = messages.lastOrNull() ?: return@LaunchedEffect
@@ -721,12 +933,26 @@ private fun MessageList(
 
     LaunchedEffect(focusMessageId) {
         val targetId = focusMessageId ?: return@LaunchedEffect
-        val index = messages.indexOfFirst { it.id == targetId }
+        val index = entries.indexOfFirst {
+            it is ChatListEntry.Message && it.message.id == targetId
+        }
         if (index >= 0) {
-            val offset = if (hasMore || loadingOlder) 1 else 0
-            listState.animateScrollToItem(index + offset)
+            listState.animateScrollToItem(index + headerOffset)
         }
         onFocusConsumed()
+    }
+
+    var hasScrolled by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect {
+            if (it) hasScrolled = true
+        }
+    }
+    LaunchedEffect(listState, hasMore, loadingOlder, hasScrolled) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { index ->
+                if (hasScrolled && index <= 1 && hasMore && !loadingOlder) onLoadOlder()
+            }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -755,22 +981,43 @@ private fun MessageList(
                 }
             }
         }
-        items(messages, key = { it.id }) { message ->
-            val isMine = message.userId == currentUserId || message.fromUserId == currentUserId
-            MessageBubble(
-                message = message,
-                isMine = isMine,
-                showSender = target is ChatTarget.Channel && !isMine,
-                baseUrl = baseUrl,
-                canRecall = isMine && recallEnabled && message.type != "recalled",
-                canDelete = isMine && target is ChatTarget.Channel && message.type != "recalled",
-                canCopy = message.type !in setOf("image", "file") && message.content.isNotBlank(),
-                onRecall = { onRecall(message) },
-                onDelete = { onDelete(message) },
-                onCopy = { onCopy(message.content) },
-                onPreviewImage = onPreviewImage,
-                onOpenFile = onOpenFile,
-            )
+        items(entries, key = { it.key }) { entry ->
+            when (entry) {
+                is ChatListEntry.Day -> DaySeparator(entry.label)
+                is ChatListEntry.Unread -> UnreadSeparator()
+                is ChatListEntry.Message -> {
+                    val message = entry.message
+                    val isMine = message.userId == currentUserId ||
+                        message.fromUserId == currentUserId
+                    MessageBubble(
+                        message = message,
+                        isMine = isMine,
+                        showSender = target is ChatTarget.Channel && !isMine,
+                        baseUrl = baseUrl,
+                        canRecall = isMine && recallEnabled && message.id > 0 &&
+                            message.status == "sent" && message.type != "recalled",
+                        canDelete = isMine && target is ChatTarget.Channel && message.id > 0 &&
+                            message.status == "sent" && message.type != "recalled",
+                        canCopy = message.type !in setOf("image", "file") &&
+                            message.content.isNotBlank(),
+                        onRecall = { onRecall(message) },
+                        onDelete = { onDelete(message) },
+                        onRetry = { onRetry(message) },
+                        onDiscard = { onDiscard(message) },
+                        onReply = { onReply(message) },
+                        onOpenParent = { parentId -> onOpenParent(parentId) },
+                        mentionsMe = message.mentionedUsers
+                            ?.split(',')
+                            ?.any { it.trim().toLongOrNull() == currentUserId } == true,
+                        canReply = message.type !in setOf("system", "recalled"),
+                        onCopy = { onCopy(message.content) },
+                        onPreviewImage = onPreviewImage,
+                        onOpenFile = onOpenFile,
+                        downloadingFileId = downloadingFileId,
+                        downloadProgress = downloadProgress,
+                    )
+                }
+            }
         }
     }
         if (!isAtBottom || newMessageCount > 0) {
@@ -809,9 +1056,17 @@ private fun MessageBubble(
     canCopy: Boolean,
     onRecall: () -> Unit,
     onDelete: () -> Unit,
+    onRetry: () -> Unit,
+    onDiscard: () -> Unit,
+    onReply: () -> Unit,
+    onOpenParent: (Long) -> Unit,
+    mentionsMe: Boolean,
+    canReply: Boolean,
     onCopy: () -> Unit,
     onPreviewImage: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: (MessageDto) -> Unit,
+    downloadingFileId: Long?,
+    downloadProgress: Float?,
 ) {
     val isRecalled = message.type == "recalled"
     val isSystem = message.type == "system"
@@ -870,6 +1125,14 @@ private fun MessageBubble(
                     modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
                 )
             }
+            if (mentionsMe) {
+                Text(
+                    text = "提到了你",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+                )
+            }
 
             Box {
                 Surface(
@@ -885,19 +1148,27 @@ private fun MessageBubble(
                         MaterialTheme.colorScheme.surfaceVariant
                     },
                 ) {
-                    Box(
+                    Column(
                         modifier = Modifier.combinedClickable(
                             onClick = {
                                 when (message.type) {
                                     "image" -> imageUrl?.let(onPreviewImage)
-                                    "file" -> imageUrl?.let(onOpenFile)
+                                    "file" -> onOpenFile(message)
                                 }
                             },
                             onLongClick = {
-                                if (canCopy || canRecall || canDelete) menuExpanded = true
+                                val localPending = isMine &&
+                                    (message.status == "failed" || message.status == "pending")
+                                if (canCopy || canRecall || canDelete || canReply || localPending) {
+                                    menuExpanded = true
+                                }
                             },
                         ),
                     ) {
+                        message.parent?.let { parent ->
+                            ParentQuote(parent = parent, onOpen = { onOpenParent(parent.id) })
+                            Spacer(Modifier.height(4.dp))
+                        }
                         when (message.type) {
                             "image" -> {
                                 if (imageUrl != null) {
@@ -919,29 +1190,44 @@ private fun MessageBubble(
                             }
 
                             "file" -> {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.InsertDriveFile,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
+                                if (isVoiceMessage(message)) {
+                                    VoiceMessageRow(
+                                        url = imageUrl,
+                                        durationLabel = voiceDurationLabel(message),
                                     )
-                                    Spacer(Modifier.width(8.dp))
-                                    Column(Modifier.weight(1f, fill = false)) {
-                                        Text(
-                                            text = fileName(imageUrl),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
+                                } else {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.InsertDriveFile,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
                                         )
-                                        message.fileSize?.let {
+                                        Spacer(Modifier.width(8.dp))
+                                        Column(Modifier.weight(1f, fill = false)) {
                                             Text(
-                                                text = formatSize(it),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                text = fileName(imageUrl),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
                                             )
+                                            message.fileSize?.let {
+                                                Text(
+                                                    text = formatSize(it),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            if (downloadingFileId == message.id) {
+                                                LinearProgressIndicator(
+                                                    progress = { downloadProgress ?: 0f },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 6.dp),
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -949,7 +1235,7 @@ private fun MessageBubble(
 
                             else -> {
                                 Text(
-                                    text = message.content,
+                                    text = highlightedContent(message.content),
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     style = MaterialTheme.typography.bodyLarge,
                                 )
@@ -971,6 +1257,15 @@ private fun MessageBubble(
                             },
                         )
                     }
+                    if (canReply) {
+                        DropdownMenuItem(
+                            text = { Text("回复") },
+                            onClick = {
+                                menuExpanded = false
+                                onReply()
+                            },
+                        )
+                    }
                     if (canRecall) {
                         DropdownMenuItem(
                             text = { Text("撤回") },
@@ -989,15 +1284,68 @@ private fun MessageBubble(
                             },
                         )
                     }
+                    if (isMine && message.status == "failed") {
+                        DropdownMenuItem(
+                            text = { Text("重新发送") },
+                            onClick = {
+                                menuExpanded = false
+                                onRetry()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text("删除本地消息", color = MaterialTheme.colorScheme.error)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onDiscard()
+                            },
+                        )
+                    }
+                    if (isMine && message.status == "pending") {
+                        DropdownMenuItem(
+                            text = { Text("取消发送") },
+                            onClick = {
+                                menuExpanded = false
+                                onDiscard()
+                            },
+                        )
+                    }
                 }
             }
 
-            Text(
-                text = TimeFormat.chatTimestamp(message.createdAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp),
-            )
+            ) {
+                Text(
+                    text = TimeFormat.chatTimestamp(message.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (isMine && message.status == "pending") {
+                    Spacer(Modifier.width(4.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(10.dp),
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        text = "发送中",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (isMine && message.status == "failed") {
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "发送失败，点按重试",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.clickable(onClick = onRetry),
+                    )
+                }
+            }
         }
     }
 
@@ -1042,43 +1390,245 @@ private fun MessageInput(
     sending: Boolean,
     uploading: Boolean,
     uploadProgress: Float?,
-    onSendText: (String, () -> Unit) -> Unit,
-    onPickImage: (Uri) -> Unit,
+    offline: Boolean,
+    members: List<ChannelMemberDto>,
+    replyTo: MessageDto?,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onCancelReply: () -> Unit,
+    onSendText: (String, List<Long>, () -> Unit) -> Unit,
+    onPickImages: (List<Uri>) -> Unit,
     onPickFile: (Uri) -> Unit,
+    onSendVoice: (File, Long) -> Unit,
     onCancelUpload: () -> Unit,
 ) {
-    var draft by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    val recorder = remember { VoiceRecorder(context) }
     var attachMenu by remember { mutableStateOf(false) }
+    var mentionMenu by remember { mutableStateOf(false) }
+    var mentionedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var recording by remember { mutableStateOf(false) }
+    var recordSeconds by remember { mutableIntStateOf(0) }
+    var recordStart by remember { mutableLongStateOf(0L) }
+
+    val startRecording = {
+        recordStart = System.currentTimeMillis()
+        recordSeconds = 0
+        if (recorder.start()) {
+            recording = true
+        } else {
+            Toast.makeText(context, "无法开始录音", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) startRecording()
+        else Toast.makeText(context, "需要麦克风权限才能发送语音", Toast.LENGTH_SHORT).show()
+    }
+    val requestRecording = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startRecording()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    val finishRecording = {
+        if (recording) {
+            val duration = System.currentTimeMillis() - recordStart
+            val file = recorder.stop(duration)
+            recording = false
+            recordSeconds = 0
+            if (file != null) onSendVoice(file, duration)
+        }
+    }
+    val cancelRecording = {
+        recorder.cancel()
+        recording = false
+        recordSeconds = 0
+    }
+
+    LaunchedEffect(recording) {
+        if (!recording) return@LaunchedEffect
+        while (recording) {
+            delay(200)
+            val seconds = ((System.currentTimeMillis() - recordStart) / 1000).toInt()
+            recordSeconds = seconds
+            if (seconds >= 60) {
+                finishRecording()
+                break
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { recorder.cancel() }
+    }
     val sendDraft = {
         val content = draft
-        if (content.isNotBlank() && !sending && !uploading) {
-            onSendText(content) {
-                if (draft == content) draft = ""
+        if (content.isNotBlank() && !uploading) {
+            val parsed = members
+                .filter { content.contains("@${it.username}") }
+                .map { it.userId }
+            onSendText(content, (mentionedIds + parsed).distinct()) {
+                mentionedIds = emptySet()
             }
         }
     }
     val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri -> if (uri != null) onPickImage(uri) }
+        contract = ActivityResultContracts.GetMultipleContents(),
+    ) { uris -> if (uris.isNotEmpty()) onPickImages(uris) }
     val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
+        contract = ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) onPickFile(uri) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val uri = cameraUri
+        cameraUri = null
+        if (success && uri != null) onPickImages(listOf(uri))
+    }
+    val launchCamera = {
+        val directory = File(context.cacheDir, "camera").apply { mkdirs() }
+        val file = File(directory, "camera_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        cameraUri = uri
+        cameraLauncher.launch(uri)
+    }
 
     Column {
         HorizontalDivider()
+        replyTo?.let { reply ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "回复 ${reply.username.orEmpty()}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = messagePreview(reply),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = onCancelReply) {
+                        Icon(Icons.Filled.Close, contentDescription = "取消回复")
+                    }
+                }
+            }
+        }
+        if (offline) {
+            Text(
+                text = "离线模式：文字消息会排队，联网后自动发送；附件需联网",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (recording) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Mic,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "录音中 ${recordSeconds}s / 60s",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    TextButton(onClick = cancelRecording) { Text("取消") }
+                    TextButton(onClick = finishRecording) { Text("发送") }
+                }
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
+            if (members.isNotEmpty()) {
+                Box {
+                    IconButton(
+                        onClick = { mentionMenu = true },
+                        enabled = !uploading,
+                    ) {
+                        Icon(Icons.Filled.AlternateEmail, contentDescription = "提及成员")
+                    }
+                    DropdownMenu(
+                        expanded = mentionMenu,
+                        onDismissRequest = { mentionMenu = false },
+                    ) {
+                        members.take(50).forEach { member ->
+                            val name = member.nickname.takeIf { it.isNotBlank() }
+                                ?: member.username
+                            DropdownMenuItem(
+                                text = { Text("$name  @${member.username}") },
+                                onClick = {
+                                    mentionMenu = false
+                                    val prefix = if (draft.isNotEmpty() && !draft.endsWith(" ")) {
+                                        "$draft "
+                                    } else {
+                                        draft
+                                    }
+                                    onDraftChange("$prefix@${member.username} ")
+                                    mentionedIds = mentionedIds + member.userId
+                                },
+                            )
+                        }
+                    }
+                }
+            }
             Box {
-                IconButton(onClick = { attachMenu = true }, enabled = !sending && !uploading) {
+                IconButton(
+                    onClick = { attachMenu = true },
+                    enabled = !uploading && !offline,
+                ) {
                     Icon(Icons.Filled.AttachFile, contentDescription = "附件")
                 }
                 DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
                     DropdownMenuItem(
-                        text = { Text("图片") },
+                        text = { Text("拍照") },
+                        leadingIcon = { Icon(Icons.Filled.PhotoCamera, contentDescription = null) },
+                        onClick = {
+                            attachMenu = false
+                            launchCamera()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("图片（可多选）") },
                         leadingIcon = { Icon(Icons.Filled.Image, contentDescription = null) },
                         onClick = {
                             attachMenu = false
@@ -1090,7 +1640,15 @@ private fun MessageInput(
                         leadingIcon = { Icon(Icons.Filled.InsertDriveFile, contentDescription = null) },
                         onClick = {
                             attachMenu = false
-                            filePicker.launch("*/*")
+                            filePicker.launch(
+                                arrayOf(
+                                    "application/pdf",
+                                    "application/msword",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    "text/plain",
+                                    "application/zip",
+                                ),
+                            )
                         },
                     )
                 }
@@ -1098,20 +1656,36 @@ private fun MessageInput(
 
             OutlinedTextField(
                 value = draft,
-                onValueChange = { if (it.length <= 500) draft = it },
+                onValueChange = { if (it.length <= 500) onDraftChange(it) },
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 4.dp),
                 placeholder = { Text("输入消息…") },
                 maxLines = 5,
+                enabled = !recording,
                 shape = RoundedCornerShape(22.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { sendDraft() }),
             )
 
             IconButton(
+                onClick = { if (recording) finishRecording() else requestRecording() },
+                enabled = !uploading && !offline,
+            ) {
+                Icon(
+                    imageVector = if (recording) Icons.Filled.Stop else Icons.Filled.Mic,
+                    contentDescription = if (recording) "停止录音" else "语音",
+                    tint = if (recording) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+
+            IconButton(
                 onClick = sendDraft,
-                enabled = draft.isNotBlank() && !sending && !uploading,
+                enabled = draft.isNotBlank() && !uploading && !recording,
             ) {
                 if (sending || uploading) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -1147,6 +1721,204 @@ private fun MessageInput(
             }
         }
     }
+}
+
+@Composable
+private fun VoiceMessageRow(url: String?, durationLabel: String) {
+    var playing by remember(url) { mutableStateOf(false) }
+    var preparing by remember(url) { mutableStateOf(false) }
+    var player by remember(url) { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(url) {
+        onDispose {
+            runCatching { player?.release() }
+            player = null
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .padding(12.dp)
+            .clickable(enabled = url != null) {
+                if (playing) {
+                    runCatching { player?.pause() }
+                    playing = false
+                    return@clickable
+                }
+                val existing = player
+                if (existing != null) {
+                    runCatching { existing.start() }
+                    playing = true
+                    return@clickable
+                }
+                if (url == null || preparing) return@clickable
+                preparing = true
+                val created = MediaPlayer()
+                runCatching {
+                    created.setDataSource(url)
+                    created.setOnPreparedListener { mp ->
+                        preparing = false
+                        runCatching { mp.start() }
+                        playing = true
+                    }
+                    created.setOnCompletionListener { mp ->
+                        playing = false
+                        runCatching { mp.seekTo(0) }
+                    }
+                    created.setOnErrorListener { mp, _, _ ->
+                        preparing = false
+                        playing = false
+                        runCatching { mp.release() }
+                        player = null
+                        true
+                    }
+                    created.prepareAsync()
+                    player = created
+                }.onFailure {
+                    preparing = false
+                    runCatching { created.release() }
+                    player = null
+                }
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (preparing) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(
+                imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (playing) "暂停" else "播放语音",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = durationLabel,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+private fun isVoiceMessage(message: MessageDto): Boolean =
+    message.type == "file" &&
+        (message.content.startsWith("voice:") || isVoiceFile(message.fileUrl))
+
+private fun isVoiceFile(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val extension = Uri.parse(url).lastPathSegment
+        ?.substringAfterLast('.', "")
+        ?.lowercase()
+        .orEmpty()
+    return extension in setOf("m4a", "aac", "mp3", "wav", "ogg", "amr")
+}
+
+private fun voiceDurationLabel(message: MessageDto): String {
+    val fromContent = message.content.removePrefix("voice:").toIntOrNull()
+    if (fromContent != null) return "${fromContent}s"
+    val name = message.fileUrl?.let { Uri.parse(it).lastPathSegment } ?: return "语音"
+    val seconds = Regex("voice_(\\d+)s").find(name)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        ?: return "语音"
+    return "${seconds}s"
+}
+
+@Composable
+private fun ParentQuote(parent: ParentMessageDto, onOpen: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, top = 8.dp)
+            .clickable(onClick = onOpen),
+    ) {
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+            Text(
+                text = parent.username,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = messagePreview(parent),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun highlightKeyword(text: String, keyword: String): androidx.compose.ui.text.AnnotatedString {
+    if (keyword.isBlank()) return androidx.compose.ui.text.AnnotatedString(text)
+    val color = MaterialTheme.colorScheme.primary
+    val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
+    var index = text.indexOf(keyword, ignoreCase = true)
+    while (index >= 0) {
+        builder.addStyle(
+            androidx.compose.ui.text.SpanStyle(
+                color = color,
+                fontWeight = FontWeight.SemiBold,
+                background = color.copy(alpha = 0.16f),
+            ),
+            index,
+            index + keyword.length,
+        )
+        index = text.indexOf(keyword, index + keyword.length, ignoreCase = true)
+    }
+    return builder.toAnnotatedString()
+}
+
+@Composable
+private fun highlightedContent(text: String): androidx.compose.ui.text.AnnotatedString {
+    val color = MaterialTheme.colorScheme.primary
+    val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
+    val regex = Regex("@[\\w\\u4e00-\\u9fa5]{1,32}")
+    regex.findAll(text).forEach { match ->
+        builder.addStyle(
+            androidx.compose.ui.text.SpanStyle(
+                color = color,
+                fontWeight = FontWeight.Medium,
+            ),
+            match.range.first,
+            match.range.last + 1,
+        )
+    }
+    val urlRegex = Regex("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+")
+    urlRegex.findAll(text).forEach { match ->
+        val style = androidx.compose.ui.text.SpanStyle(
+            color = color,
+            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+        )
+        builder.addStyle(style, match.range.first, match.range.last + 1)
+        builder.addLink(
+            androidx.compose.ui.text.LinkAnnotation.Url(url = match.value),
+            match.range.first,
+            match.range.last + 1,
+        )
+    }
+    return builder.toAnnotatedString()
+}
+
+private fun messagePreview(parent: ParentMessageDto): String = when (parent.type) {
+    "image" -> "[图片]"
+    "file" -> if (parent.content.startsWith("voice:")) "[语音]" else "[文件]"
+    else -> parent.content
+}
+
+private fun messagePreview(message: MessageDto?): String = when (message?.type) {
+    "image" -> "[图片]"
+    "file" -> if (
+        message.content.startsWith("voice:") || isVoiceFile(message.fileUrl)
+    ) {
+        "[语音]"
+    } else {
+        "[文件]"
+    }
+
+    "recalled" -> "[已撤回]"
+    else -> message?.content.orEmpty()
 }
 
 private fun fileName(url: String?): String {

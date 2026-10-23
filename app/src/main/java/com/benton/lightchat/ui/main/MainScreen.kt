@@ -112,17 +112,17 @@ fun MainScreen(
         friendsViewModel.start()
     }
 
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            viewModel.pollLoop()
-        }
-    }
-
     LaunchedEffect(lifecycleOwner, selectedTab) {
         if (selectedTab == 1) {
             lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 friendsViewModel.load()
             }
+        }
+    }
+
+    LaunchedEffect(state.friendPending, state.offline) {
+        if (!state.offline && state.friendPending > friendsState.requests.size) {
+            friendsViewModel.load()
         }
     }
 
@@ -183,15 +183,16 @@ fun MainScreen(
                         }
                     }
                     if (selectedTab == 1) {
+                        val pendingCount = maxOf(state.friendPending, friendsState.requests.size)
                         BadgedBox(
                             badge = {
-                                if (friendsState.requests.isNotEmpty()) {
+                                if (pendingCount > 0) {
                                     Badge {
                                         Text(
-                                            if (friendsState.requests.size > 99) {
+                                            if (pendingCount > 99) {
                                                 "99+"
                                             } else {
-                                                friendsState.requests.size.toString()
+                                                pendingCount.toString()
                                             },
                                         )
                                     }
@@ -325,9 +326,13 @@ private fun MessagesTab(
         EmptyState(
             icon = Icons.Filled.Forum,
             title = "暂无会话",
-            description = "添加好友或加入群聊，开始聊天吧",
-            actionLabel = "添加好友/群聊",
-            onAction = onOpenAdd,
+            description = if (state.offline) {
+                "本地暂无缓存，联网后自动加载"
+            } else {
+                "添加好友或加入群聊，开始聊天吧"
+            },
+            actionLabel = if (state.offline) null else "添加好友/群聊",
+            onAction = if (state.offline) null else onOpenAdd,
         )
         return
     }
