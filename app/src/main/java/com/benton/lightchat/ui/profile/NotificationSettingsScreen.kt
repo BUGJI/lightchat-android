@@ -54,7 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.ui.components.FormSkeleton
-import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.SyncBarContent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,16 +92,18 @@ fun NotificationSettingsScreen(
             return@Scaffold
         }
 
-        Column(
+        SyncBarContent(
+            visible = state.refreshing,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(padding),
+            columnModifier = Modifier
+                .fillMaxSize()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            InlineSyncBar(visible = state.refreshing)
             Card(Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(16.dp),

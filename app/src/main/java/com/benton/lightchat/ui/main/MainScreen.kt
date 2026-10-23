@@ -246,7 +246,6 @@ fun MainScreen(
             if (state.offline) {
                 OfflineBanner()
             }
-            InlineSyncBar(visible = state.refreshing)
             Box(Modifier.weight(1f)) {
                 when (selectedTab) {
                     0 -> PullToRefreshBox(
@@ -287,6 +286,10 @@ fun MainScreen(
                         animatedVisibilityScope = animatedVisibilityScope,
                     )
                 }
+                InlineSyncBar(
+                    visible = state.refreshing,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
     }

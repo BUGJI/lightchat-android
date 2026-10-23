@@ -60,7 +60,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ChannelInfoDto
 import com.benton.lightchat.data.remote.ChannelMemberDto
 import com.benton.lightchat.ui.components.FormSkeleton
-import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.SyncBarContent
 import com.benton.lightchat.ui.components.UserAvatar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -129,12 +129,13 @@ fun ChannelInfoScreen(
             return@Scaffold
         }
 
-        Column(
+        SyncBarContent(
+            visible = state.refreshing,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            columnModifier = Modifier.fillMaxSize(),
         ) {
-            InlineSyncBar(visible = state.refreshing)
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(

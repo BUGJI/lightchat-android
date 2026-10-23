@@ -3,6 +3,7 @@ package com.benton.lightchat.ui.profile
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,77 +55,83 @@ fun ProfileScreen(
     }
 
     val user = state.user
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        InlineSyncBar(visible = state.refreshing)
-        if (user == null) {
-            Text(
-                text = state.error ?: "无法加载个人资料",
-                color = MaterialTheme.colorScheme.error,
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (user == null) {
+                Text(
+                    text = state.error ?: "无法加载个人资料",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Button(onClick = viewModel::refresh) { Text("重试") }
+                return@Column
+            }
+
+            ProfileHeader(
+                user = user,
+                baseUrl = baseUrl,
+                onEdit = { onEditProfile(user.avatar) },
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
             )
-            Button(onClick = viewModel::refresh) { Text("重试") }
-            return@Column
-        }
 
-        ProfileHeader(
-            user = user,
-            baseUrl = baseUrl,
-            onEdit = { onEditProfile(user.avatar) },
-            sharedTransitionScope = sharedTransitionScope,
-            animatedVisibilityScope = animatedVisibilityScope,
-        )
+            if (!user.bio.isNullOrBlank()) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("个人简介", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(4.dp))
+                        Text(user.bio, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
 
-        if (!user.bio.isNullOrBlank()) {
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("个人简介", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(4.dp))
-                    Text(user.bio, style = MaterialTheme.typography.bodyMedium)
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    user.email?.takeIf { it.isNotBlank() }?.let {
+                        ProfileInfoRow("邮箱", it, verified = user.emailVerified)
+                    }
+                    user.joinDate?.takeIf { it.isNotBlank() }?.let {
+                        ProfileInfoRow("加入时间", it)
+                    }
+                    ProfileInfoRow("用户 ID", user.id.toString())
+                    state.error?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                ProfileActionRow(
+                    icon = Icons.Filled.Settings,
+                    title = "设置",
+                    onClick = onOpenSettings,
+                )
+                ProfileActionRow(
+                    icon = Icons.AutoMirrored.Filled.Logout,
+                    title = "退出登录",
+                    onClick = { confirmLogout = true },
+                    destructive = true,
+                    showDivider = true,
+                )
             }
         }
 
-        Card(Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                user.email?.takeIf { it.isNotBlank() }?.let {
-                    ProfileInfoRow("邮箱", it, verified = user.emailVerified)
-                }
-                user.joinDate?.takeIf { it.isNotBlank() }?.let {
-                    ProfileInfoRow("加入时间", it)
-                }
-                ProfileInfoRow("用户 ID", user.id.toString())
-                state.error?.let {
-                    Text(
-                        text = it,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth()) {
-            ProfileActionRow(
-                icon = Icons.Filled.Settings,
-                title = "设置",
-                onClick = onOpenSettings,
-            )
-            ProfileActionRow(
-                icon = Icons.AutoMirrored.Filled.Logout,
-                title = "退出登录",
-                onClick = { confirmLogout = true },
-                destructive = true,
-                showDivider = true,
-            )
-        }
+        InlineSyncBar(
+            visible = state.refreshing,
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
     }
 
     if (confirmLogout) {

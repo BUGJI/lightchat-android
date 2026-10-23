@@ -65,7 +65,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.benton.lightchat.data.remote.ChannelDto
 import com.benton.lightchat.data.remote.UserDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.SyncBarContent
 import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.UserAvatar
 
@@ -121,12 +121,13 @@ fun AddContactsScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        Column(
+        SyncBarContent(
+            visible = state.refreshing,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            columnModifier = Modifier.fillMaxSize(),
         ) {
-            InlineSyncBar(visible = state.refreshing)
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()

@@ -60,7 +60,7 @@ import com.benton.lightchat.data.remote.BlockedUserDto
 import com.benton.lightchat.data.remote.FriendDto
 import com.benton.lightchat.data.remote.FriendRequestDto
 import com.benton.lightchat.ui.components.EmptyState
-import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.SyncBarContent
 import com.benton.lightchat.ui.components.ListSkeleton
 import com.benton.lightchat.ui.components.UserAvatar
 import com.benton.lightchat.util.TimeFormat
@@ -120,12 +120,13 @@ fun FriendsScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        Column(
+        SyncBarContent(
+            visible = state.refreshing,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            columnModifier = Modifier.fillMaxSize(),
         ) {
-            InlineSyncBar(visible = state.refreshing)
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()

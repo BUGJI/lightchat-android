@@ -1,10 +1,13 @@
 package com.benton.lightchat.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -142,11 +145,38 @@ fun LoadingBox(modifier: Modifier = Modifier) {
 
 @Composable
 fun InlineSyncBar(visible: Boolean, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible = visible) {
-        LinearProgressIndicator(
-            modifier = modifier
-                .fillMaxWidth()
-                .height(2.dp),
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(2.dp),
+    ) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            LinearProgressIndicator(Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+fun SyncBarContent(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    columnModifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Box(modifier) {
+        Column(
+            modifier = columnModifier,
+            verticalArrangement = verticalArrangement,
+            content = content,
+        )
+        InlineSyncBar(
+            visible = visible,
+            modifier = Modifier.align(Alignment.TopCenter),
         )
     }
 }

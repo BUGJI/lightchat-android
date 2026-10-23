@@ -299,7 +299,6 @@ fun ChatScreen(
             if (state.offline) {
                 OfflineBanner()
             }
-            InlineSyncBar(visible = state.initialSyncing)
             if (target is ChatTarget.Channel && !state.announcement.isNullOrBlank()) {
                 AnnouncementBanner(
                     text = state.announcement.orEmpty(),
@@ -388,6 +387,10 @@ fun ChatScreen(
                         )
                     }
                 }
+                InlineSyncBar(
+                    visible = state.initialSyncing,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
 
             MessageInput(

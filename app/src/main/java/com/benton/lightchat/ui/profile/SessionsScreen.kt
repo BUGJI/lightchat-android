@@ -1,6 +1,7 @@
 package com.benton.lightchat.ui.profile
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -98,8 +99,7 @@ fun SessionsScreen(
                 modifier = Modifier.padding(padding),
             )
 
-            else -> Column(Modifier.padding(padding)) {
-                InlineSyncBar(visible = state.refreshing)
+            else -> Box(Modifier.fillMaxSize().padding(padding)) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
@@ -123,6 +123,10 @@ fun SessionsScreen(
                         }
                     }
                 }
+                InlineSyncBar(
+                    visible = state.refreshing,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
     }

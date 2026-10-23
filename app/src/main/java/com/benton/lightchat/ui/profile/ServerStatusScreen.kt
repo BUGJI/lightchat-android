@@ -16,7 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.Card
 import com.benton.lightchat.ui.components.FormSkeleton
-import com.benton.lightchat.ui.components.InlineSyncBar
+import com.benton.lightchat.ui.components.SyncBarContent
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,15 +61,17 @@ fun ServerStatusScreen(
             FormSkeleton(Modifier.padding(padding), blocks = 2)
             return@Scaffold
         }
-        Column(
+        SyncBarContent(
+            visible = state.refreshing,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(padding),
+            columnModifier = Modifier
+                .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            InlineSyncBar(visible = state.refreshing)
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
