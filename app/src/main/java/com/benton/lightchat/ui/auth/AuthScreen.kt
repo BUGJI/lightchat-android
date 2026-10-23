@@ -83,11 +83,11 @@ fun AuthScreen(
         exitTransition = { NavMotion.exit(layoutDirection) },
         popEnterTransition = { NavMotion.popEnter(layoutDirection) },
         popExitTransition = { NavMotion.popExit(layoutDirection) },
-        predictivePopEnterTransition = { swipeEdge ->
-            NavMotion.predictivePopEnter(swipeEdge)
+        predictivePopEnterTransition = {
+            NavMotion.predictivePopEnter()
         },
-        predictivePopExitTransition = { swipeEdge ->
-            NavMotion.predictivePopExit(swipeEdge)
+        predictivePopExitTransition = {
+            NavMotion.predictivePopExit(layoutDirection)
         },
         sizeTransform = null,
     ) {

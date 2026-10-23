@@ -2,6 +2,8 @@ package com.benton.lightchat.ui.profile
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -47,6 +49,9 @@ fun EditProfileScreen(
     baseUrl: String?,
     onBack: () -> Unit,
     onSaved: () -> Unit,
+    initialAvatarUrl: String? = null,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
     viewModel: EditProfileViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -76,11 +81,6 @@ fun EditProfileScreen(
             )
         },
     ) { padding ->
-        if (state.loading) {
-            FormSkeleton(Modifier.padding(padding), blocks = 4)
-            return@Scaffold
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -93,10 +93,20 @@ fun EditProfileScreen(
         ) {
             UserAvatar(
                 name = state.nickname.ifBlank { state.username },
-                avatarUrl = state.localAvatar?.toString() ?: state.existingAvatarUrl,
+                avatarUrl = state.localAvatar?.toString()
+                    ?: state.existingAvatarUrl
+                    ?: initialAvatarUrl,
                 baseUrl = baseUrl,
                 size = 96.dp,
+                modifier = profileAvatarSharedModifier(
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                ),
             )
+            if (state.loading) {
+                FormSkeleton(Modifier.fillMaxWidth(), blocks = 4)
+                return@Column
+            }
             TextButton(onClick = { imagePicker.launch("image/*") }) {
                 Icon(Icons.Filled.PhotoCamera, contentDescription = null)
                 Spacer(Modifier.height(4.dp))

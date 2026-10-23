@@ -1,5 +1,7 @@
 package com.benton.lightchat.ui.profile
 
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -34,8 +36,10 @@ import com.benton.lightchat.ui.components.InlineSyncBar
 @Composable
 fun ProfileScreen(
     baseUrl: String?,
-    onEditProfile: () -> Unit,
+    onEditProfile: (String?) -> Unit,
     onOpenSettings: () -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
     viewModel: ProfileViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -69,7 +73,9 @@ fun ProfileScreen(
         ProfileHeader(
             user = user,
             baseUrl = baseUrl,
-            onEdit = onEditProfile,
+            onEdit = { onEditProfile(user.avatar) },
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
         )
 
         if (!user.bio.isNullOrBlank()) {

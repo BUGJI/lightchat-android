@@ -1,6 +1,8 @@
 package com.benton.lightchat.ui.main
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -93,7 +95,9 @@ fun MainScreen(
     onOpenAdd: () -> Unit,
     onOpenFriends: () -> Unit,
     onOpenSettings: () -> Unit,
-    onEditProfile: () -> Unit,
+    onEditProfile: (String?) -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
     viewModel: MainViewModel = viewModel(),
     friendsViewModel: FriendsViewModel = viewModel(),
 ) {
@@ -279,6 +283,8 @@ fun MainScreen(
                         baseUrl = baseUrl,
                         onEditProfile = onEditProfile,
                         onOpenSettings = onOpenSettings,
+                        sharedTransitionScope = sharedTransitionScope,
+                        animatedVisibilityScope = animatedVisibilityScope,
                     )
                 }
             }

@@ -15,6 +15,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,6 +27,7 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -101,13 +105,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -137,6 +147,12 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
 
+private data class ImagePreviewTarget(
+    val url: String,
+    val bounds: Rect,
+    val aspectRatio: Float,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -155,7 +171,7 @@ fun ChatScreen(
     val clipboard = remember(context) {
         context.getSystemService(ClipboardManager::class.java)
     }
-    var previewUrl by remember { mutableStateOf<String?>(null) }
+    var previewTarget by remember { mutableStateOf<ImagePreviewTarget?>(null) }
     var pendingSaveBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val saveImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("image/*"),
@@ -195,7 +211,7 @@ fun ChatScreen(
     }
 
     BackHandler(
-        enabled = state.replyTo != null && previewUrl == null && !searchOpen,
+        enabled = state.replyTo != null && previewTarget == null && !searchOpen,
     ) {
         viewModel.clearReply()
     }
@@ -321,7 +337,7 @@ fun ChatScreen(
                         },
                         focusMessageId = state.focusMessageId,
                         onFocusConsumed = viewModel::consumeFocus,
-                        onPreviewImage = { previewUrl = it },
+                        onPreviewImage = { previewTarget = it },
                         onOpenFile = { message ->
                             viewModel.downloadAttachment(message) { file ->
                                 val uri = FileProvider.getUriForFile(
@@ -391,10 +407,10 @@ fun ChatScreen(
         }
     }
 
-    previewUrl?.let { url ->
+    previewTarget?.let { target ->
         ImagePreviewOverlay(
-            url = url,
-            onDismiss = { previewUrl = null },
+            target = target,
+            onDismiss = { previewTarget = null },
             onShare = { imageUrl ->
                 runCatching {
                     val share = Intent(Intent.ACTION_SEND).apply {
@@ -504,18 +520,33 @@ private fun AnnouncementBanner(text: String, onClick: () -> Unit) {
 
 @Composable
 private fun ImagePreviewOverlay(
-    url: String,
+    target: ImagePreviewTarget,
     onDismiss: () -> Unit,
     onShare: (String) -> Unit,
     onSave: (String) -> Unit,
 ) {
-    var scale by remember(url) { mutableFloatStateOf(1f) }
-    var offset by remember(url) { mutableStateOf(Offset.Zero) }
+    var scale by remember(target.url) { mutableFloatStateOf(1f) }
+    var offset by remember(target.url) { mutableStateOf(Offset.Zero) }
     val zoomed = scale > 1f
+    val entry = remember(target.url) { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         val next = (scale * zoomChange).coerceIn(1f, 5f)
         scale = next
         offset = if (next <= 1f) Offset.Zero else offset + panChange
+    }
+
+    fun close() {
+        scope.launch {
+            entry.stop()
+            entry.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
+            onDismiss()
+        }
+    }
+
+    LaunchedEffect(target.url) {
+        entry.snapTo(0f)
+        entry.animateTo(1f, tween(280, easing = FastOutSlowInEasing))
     }
 
     BackHandler(enabled = zoomed) {
@@ -526,59 +557,108 @@ private fun ImagePreviewOverlay(
     PredictiveBackOverlay(
         onDismiss = onDismiss,
         enabled = !zoomed,
-    ) { progress, direction ->
-        Box(
+    ) { backProgress ->
+        val progress = (entry.value * (1f - backProgress)).coerceIn(0f, 1f)
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    alpha = 1f - progress
-                    scaleX = 1f - progress * 0.08f
-                    scaleY = 1f - progress * 0.08f
-                    translationX = progress * size.width * 0.25f * direction
-                }
-                .background(Color.Black),
+                .background(Color.Black.copy(alpha = progress)),
         ) {
-            AsyncImage(
-                model = url,
-                contentDescription = "图片预览",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(url) {
-                        detectTapGestures(
-                            onTap = {
-                                if (scale > 1f) {
-                                    scale = 1f
-                                    offset = Offset.Zero
-                                } else {
-                                    onDismiss()
-                                }
-                            },
-                            onDoubleTap = {
-                                if (scale > 1f) {
-                                    scale = 1f
-                                    offset = Offset.Zero
-                                } else {
-                                    scale = 2.5f
-                                }
-                            },
-                        )
-                    }
-                    .transformable(transformState)
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offset.x,
-                        translationY = offset.y,
-                    ),
-                contentScale = ContentScale.Fit,
+            val density = LocalDensity.current
+            val screenWidth = with(density) { maxWidth.toPx() }
+            val screenHeight = with(density) { maxHeight.toPx() }
+            val aspectRatio = target.aspectRatio.takeIf { it > 0f } ?: 1f
+            val fullWidth: Float
+            val fullHeight: Float
+            if (screenWidth / screenHeight > aspectRatio) {
+                fullHeight = screenHeight
+                fullWidth = screenHeight * aspectRatio
+            } else {
+                fullWidth = screenWidth
+                fullHeight = screenWidth / aspectRatio
+            }
+            val fullRect = Rect(
+                left = (screenWidth - fullWidth) / 2f,
+                top = (screenHeight - fullHeight) / 2f,
+                right = (screenWidth + fullWidth) / 2f,
+                bottom = (screenHeight + fullHeight) / 2f,
             )
+            val startRect = target.bounds.takeUnless { it.isEmpty } ?: fullRect
+            val reveal = 1f - progress
+            val visualRect = Rect(
+                left = fullRect.left + (startRect.left - fullRect.left) * reveal,
+                top = fullRect.top + (startRect.top - fullRect.top) * reveal,
+                right = fullRect.right + (startRect.right - fullRect.right) * reveal,
+                bottom = fullRect.bottom + (startRect.bottom - fullRect.bottom) * reveal,
+            )
+            val heroScale = if (fullRect.width > 0f) {
+                visualRect.width / fullRect.width
+            } else {
+                1f
+            }
+            val translationX = visualRect.center.x - fullRect.center.x
+            val translationY = visualRect.center.y - fullRect.center.y
+            val cornerRadius = (16.dp * reveal / heroScale.coerceAtLeast(0.01f))
+                .coerceAtLeast(0.dp)
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(
+                        width = with(density) { fullRect.width.toDp() },
+                        height = with(density) { fullRect.height.toDp() },
+                    )
+                    .graphicsLayer {
+                        scaleX = heroScale
+                        scaleY = heroScale
+                        this.translationX = translationX
+                        this.translationY = translationY
+                    }
+                    .clip(RoundedCornerShape(cornerRadius)),
+            ) {
+                AsyncImage(
+                    model = target.url,
+                    contentDescription = "图片预览",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(target.url) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (scale > 1f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                    } else {
+                                        close()
+                                    }
+                                },
+                                onDoubleTap = {
+                                    if (scale > 1f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                    } else {
+                                        scale = 2.5f
+                                    }
+                                },
+                            )
+                        }
+                        .transformable(transformState)
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        ),
+                    contentScale = ContentScale.Fit,
+                )
+            }
 
             IconButton(
-                onClick = onDismiss,
+                onClick = { close() },
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .safeDrawingPadding()
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .alpha(progress),
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White)
             }
@@ -587,12 +667,13 @@ private fun ImagePreviewOverlay(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .safeDrawingPadding()
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .alpha(progress),
             ) {
-                IconButton(onClick = { onSave(url) }) {
+                IconButton(onClick = { onSave(target.url) }) {
                     Icon(Icons.Filled.Download, contentDescription = "保存", tint = Color.White)
                 }
-                IconButton(onClick = { onShare(url) }) {
+                IconButton(onClick = { onShare(target.url) }) {
                     Icon(Icons.Filled.Share, contentDescription = "分享", tint = Color.White)
                 }
             }
@@ -614,15 +695,13 @@ private fun SearchMessagesOverlay(
     onSelect: (MessageDto) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    PredictiveBackOverlay(onDismiss = onDismiss) { progress, direction ->
+    PredictiveBackOverlay(onDismiss = onDismiss) { progress ->
         Surface(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
                     alpha = 1f - progress
-                    scaleX = 1f - progress * 0.06f
-                    scaleY = 1f - progress * 0.06f
-                    translationX = progress * size.width * 0.25f * direction
+                    translationX = progress * size.width * 0.25f
                 },
         ) {
             Column(
@@ -932,7 +1011,7 @@ private fun MessageList(
     onCopy: (String) -> Unit,
     focusMessageId: Long?,
     onFocusConsumed: () -> Unit,
-    onPreviewImage: (String) -> Unit,
+    onPreviewImage: (ImagePreviewTarget) -> Unit,
     onOpenFile: (MessageDto) -> Unit,
     downloadingFileId: Long?,
     downloadProgress: Float?,
@@ -1095,7 +1174,7 @@ private fun MessageBubble(
     mentionsMe: Boolean,
     canReply: Boolean,
     onCopy: () -> Unit,
-    onPreviewImage: (String) -> Unit,
+    onPreviewImage: (ImagePreviewTarget) -> Unit,
     onOpenFile: (MessageDto) -> Unit,
     downloadingFileId: Long?,
     downloadProgress: Float?,
@@ -1129,6 +1208,8 @@ private fun MessageBubble(
 
     val imageUrl = UrlUtils.resolve(baseUrl, message.fileUrl)
     val alignment = if (isMine) Alignment.End else Alignment.Start
+    var imageBounds by remember(message.id) { mutableStateOf(Rect.Zero) }
+    var imageAspectRatio by remember(message.id) { mutableFloatStateOf(0f) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1184,7 +1265,17 @@ private fun MessageBubble(
                         modifier = Modifier.combinedClickable(
                             onClick = {
                                 when (message.type) {
-                                    "image" -> imageUrl?.let(onPreviewImage)
+                                    "image" -> imageUrl?.let { url ->
+                                        onPreviewImage(
+                                            ImagePreviewTarget(
+                                                url = url,
+                                                bounds = imageBounds,
+                                                aspectRatio = imageAspectRatio
+                                                    .takeIf { it > 0f } ?: 1f,
+                                            ),
+                                        )
+                                    }
+
                                     "file" -> onOpenFile(message)
                                 }
                             },
@@ -1210,7 +1301,14 @@ private fun MessageBubble(
                                         modifier = Modifier
                                             .widthIn(max = 240.dp)
                                             .heightIn(max = 280.dp)
-                                            .clip(RoundedCornerShape(16.dp)),
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .onGloballyPositioned { coordinates ->
+                                                val bounds = coordinates.boundsInWindow()
+                                                if (!bounds.isEmpty) {
+                                                    imageBounds = bounds
+                                                    imageAspectRatio = bounds.width / bounds.height
+                                                }
+                                            },
                                         contentScale = ContentScale.Fit,
                                     )
                                 } else {

@@ -1,5 +1,10 @@
 package com.benton.lightchat.ui.profile
 
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,12 +36,34 @@ import androidx.compose.ui.unit.dp
 import com.benton.lightchat.data.remote.UserDto
 import com.benton.lightchat.ui.components.UserAvatar
 
+private const val PROFILE_AVATAR_KEY = "profile_avatar"
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun profileAvatarSharedModifier(
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
+): Modifier {
+    if (sharedTransitionScope == null || animatedVisibilityScope == null) return Modifier
+    return with(sharedTransitionScope) {
+        Modifier.sharedElement(
+            sharedContentState = rememberSharedContentState(PROFILE_AVATAR_KEY),
+            animatedVisibilityScope = animatedVisibilityScope,
+            boundsTransform = { _, _ ->
+                tween(320, easing = FastOutSlowInEasing)
+            },
+        )
+    }
+}
+
 @Composable
 fun ProfileHeader(
     user: UserDto,
     baseUrl: String?,
     modifier: Modifier = Modifier,
     onEdit: (() -> Unit)? = null,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
 ) {
     val displayName = user.nickname?.takeIf { it.isNotBlank() } ?: user.username
     Card(modifier = modifier.fillMaxWidth()) {
@@ -51,6 +78,10 @@ fun ProfileHeader(
                 avatarUrl = user.avatar,
                 baseUrl = baseUrl,
                 size = 72.dp,
+                modifier = profileAvatarSharedModifier(
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                ),
             )
             Spacer(Modifier.width(16.dp))
             Column(

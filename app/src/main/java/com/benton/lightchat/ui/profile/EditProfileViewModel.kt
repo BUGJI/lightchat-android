@@ -153,8 +153,8 @@ class EditProfileViewModel(application: Application) : AndroidViewModel(applicat
             )
             when (result) {
                 is ApiResult.Success -> {
+                    userRepository.profile()
                     _state.update { it.copy(saving = false, saved = true) }
-                    viewModelScope.launch { userRepository.profile() }
                 }
                 is ApiResult.Failure -> _state.update { it.copy(saving = false, error = result.message) }
             }
